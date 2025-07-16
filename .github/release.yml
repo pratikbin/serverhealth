@@ -1,0 +1,258 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [ main, develop ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  GO_VERSION: '1.21'
+  APP_NAME: 'serverhealth'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ env.GO_VERSION }}
+
+    - name: Cache Go modules
+      uses: actions/cache@v3
+      with:
+        path: ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+
+    - name: Get dependencies
+      run: go mod download
+
+    - name: Run tests
+      run: go test -v ./...
+
+    - name: Run go vet
+      run: go vet ./...
+
+    - name: Run go fmt check
+      run: |
+        if [ "$(gofmt -s -l . | wc -l)" -gt 0 ]; then
+          echo "::error::Code is not formatted properly"
+          gofmt -s -l .
+          exit 1
+        fi
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ env.GO_VERSION }}
+
+    - name: Cache Go modules
+      uses: actions/cache@v3
+      with:
+        path: ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+
+    - name: Get dependencies
+      run: go mod download
+
+    - name: Set version
+      id: version
+      run: |
+        if [[ $GITHUB_REF == refs/tags/* ]]; then
+          VERSION=${GITHUB_REF#refs/tags/v}
+        else
+          VERSION="dev-${GITHUB_SHA::8}"
+        fi
+        echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+        echo "Version: $VERSION"
+
+    - name: Build for all platforms
+      env:
+        VERSION: ${{ steps.version.outputs.VERSION }}
+      run: |
+        chmod +x build.sh
+        ./build.sh
+
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: dist-${{ steps.version.outputs.VERSION }}
+        path: dist/
+        retention-days: 30
+
+  release:
+    needs: [test, build]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ env.GO_VERSION }}
+
+    - name: Get dependencies
+      run: go mod download
+
+    - name: Set version
+      id: version
+      run: |
+        VERSION=${GITHUB_REF#refs/tags/v}
+        echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+        echo "Version: $VERSION"
+
+    - name: Build for release
+      env:
+        VERSION: ${{ steps.version.outputs.VERSION }}
+      run: |
+        chmod +x build.sh
+        ./build.sh
+
+    - name: Create packages
+      env:
+        VERSION: ${{ steps.version.outputs.VERSION }}
+      run: |
+        # Create Debian package
+        if command -v dpkg-deb >/dev/null 2>&1; then
+          chmod +x create_deb.sh
+          ./create_deb.sh
+        fi
+
+        # Create RPM package
+        if command -v rpmbuild >/dev/null 2>&1; then
+          chmod +x create_rpm.sh
+          ./create_rpm.sh
+        fi
+
+    - name: Generate release notes
+      id: release_notes
+      run: |
+        cat > release_notes.md << 'EOF'
+        ## 🎉 Release v${{ steps.version.outputs.VERSION }}
+
+        ### 📦 Installation
+
+        **Quick Install (Linux/macOS):**
+        ```bash
+        curl -sSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | bash
+        ```
+
+        **Manual Installation:**
+        1. Download the appropriate package for your platform below
+        2. Extract the archive
+        3. Run the install script (`install.sh` on Linux/macOS, `install.bat` on Windows)
+        4. Run `serverhealth configure` to set up monitoring
+
+        ### 🚀 Quick Start
+
+        ```bash
+        # Configure the monitor
+        serverhealth configure
+
+        # Start monitoring
+        serverhealth start
+
+        # Install as system service
+        sudo serverhealth install
+
+        # Check status
+        serverhealth status
+        ```
+
+        ### 📋 Platform Support
+
+        - ✅ Linux (x64, ARM64, x86)
+        - ✅ macOS (Intel, Apple Silicon)
+        - ✅ Windows (x64, x86)
+        - ✅ FreeBSD (x64)
+
+        ### 🔧 Features
+
+        - Interactive CLI configuration
+        - Disk, CPU, and Memory monitoring
+        - Slack notifications
+        - Cross-platform service installation
+        - Configurable thresholds and intervals
+        - Beautiful CLI interface with colors
+        - Easy log viewing and management
+
+        ### 📝 Changes
+
+        See [CHANGELOG.md](CHANGELOG.md) for detailed changes.
+        EOF
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: v${{ steps.version.outputs.VERSION }}
+        name: Release v${{ steps.version.outputs.VERSION }}
+        body_path: release_notes.md
+        draft: false
+        prerelease: false
+        files: |
+          dist/*.tar.gz
+          dist/*.zip
+          dist/*.deb
+          dist/*.rpm
+          dist/checksums.txt
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Docker image (optional)
+  docker:
+    needs: [test, build]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Log in to Docker Hub
+      if: github.event_name != 'pull_request'
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKER_USERNAME }}
+        password: ${{ secrets.DOCKER_PASSWORD }}
+
+    - name: Set version
+      id: version
+      run: |
+        if [[ $GITHUB_REF == refs/tags/* ]]; then
+          VERSION=${GITHUB_REF#refs/tags/v}
+        else
+          VERSION="dev"
+        fi
+        echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        platforms: linux/amd64,linux/arm64
+        push: ${{ github.event_name != 'pull_request' }}
+        tags: |
+          ${{ github.repository_owner }}/serverhealth:${{ steps.version.outputs.VERSION }}
+          ${{ github.repository_owner }}/serverhealth:latest
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
