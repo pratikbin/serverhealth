@@ -6,7 +6,7 @@
 set -e
 
 APP_NAME="serverhealth"
-GITHUB_REPO="yourusername/serverhealth"  # Replace with your GitHub username
+GITHUB_REPO="kailashvele/serverhealth"  # Replace with your GitHub username
 LATEST_VERSION=""
 
 # Colors for output
