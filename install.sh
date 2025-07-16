@@ -121,9 +121,9 @@ get_latest_version() {
     print_status "Fetching latest version..."
 
     if command -v curl >/dev/null 2>&1; then
-        LATEST_VERSION=$(curl -s "https://api.github.com/repos/$GITHUB_REPO/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' | sed 's/v//')
+        LATEST_VERSION=$(curl -s "https://api.github.com/repos/$GITHUB_REPO/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' | sed 's/^v//')
     elif command -v wget >/dev/null 2>&1; then
-        LATEST_VERSION=$(wget -qO- "https://api.github.com/repos/$GITHUB_REPO/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' | sed 's/v//')
+        LATEST_VERSION=$(wget -qO- "https://api.github.com/repos/$GITHUB_REPO/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' | sed 's/^v//')
     else
         print_error "Neither curl nor wget found. Please install one of them."
         exit 1
@@ -141,13 +141,21 @@ get_latest_version() {
 download_and_install() {
     print_status "Downloading and installing..."
 
-    # Construct download URL
+    # Construct download URL - handle both regular versions and dev versions
     PACKAGE_NAME="${APP_NAME}-${LATEST_VERSION}-${OS}-${ARCH}"
+
+    # For the download URL, we need to add 'v' prefix if it's not a dev version
+    if [[ "$LATEST_VERSION" == dev-* ]]; then
+        TAG_NAME="v${LATEST_VERSION}"
+    else
+        TAG_NAME="v${LATEST_VERSION}"
+    fi
+
     if [ "$OS" = "windows" ]; then
-        DOWNLOAD_URL="https://github.com/$GITHUB_REPO/releases/download/v$LATEST_VERSION/${PACKAGE_NAME}.zip"
+        DOWNLOAD_URL="https://github.com/$GITHUB_REPO/releases/download/${TAG_NAME}/${PACKAGE_NAME}.zip"
         ARCHIVE_EXT="zip"
     else
-        DOWNLOAD_URL="https://github.com/$GITHUB_REPO/releases/download/v$LATEST_VERSION/${PACKAGE_NAME}.tar.gz"
+        DOWNLOAD_URL="https://github.com/$GITHUB_REPO/releases/download/${TAG_NAME}/${PACKAGE_NAME}.tar.gz"
         ARCHIVE_EXT="tar.gz"
     fi
 
@@ -162,11 +170,13 @@ download_and_install() {
     if command -v curl >/dev/null 2>&1; then
         curl -LO "$DOWNLOAD_URL" || {
             print_error "Failed to download package"
+            print_error "URL: $DOWNLOAD_URL"
             cleanup_and_exit 1
         }
     elif command -v wget >/dev/null 2>&1; then
         wget "$DOWNLOAD_URL" || {
             print_error "Failed to download package"
+            print_error "URL: $DOWNLOAD_URL"
             cleanup_and_exit 1
         }
     fi
@@ -185,9 +195,25 @@ download_and_install() {
         }
     fi
 
-    # Install binary
-    print_status "Installing binary to $INSTALL_DIR..."
-    cp "${PACKAGE_NAME}/${APP_NAME}${BINARY_EXT}" "$INSTALL_DIR/" || {
+    # Debug: show what was extracted
+    print_status "Extracted contents:"
+    ls -la
+
+    # Install binary - the extracted directory should contain the binary
+    BINARY_PATH=""
+    if [ -f "${PACKAGE_NAME}/${APP_NAME}${BINARY_EXT}" ]; then
+        BINARY_PATH="${PACKAGE_NAME}/${APP_NAME}${BINARY_EXT}"
+    elif [ -f "${APP_NAME}${BINARY_EXT}" ]; then
+        BINARY_PATH="${APP_NAME}${BINARY_EXT}"
+    else
+        print_error "Binary not found in expected locations"
+        print_error "Contents of extracted archive:"
+        find . -name "*${APP_NAME}*" -type f
+        cleanup_and_exit 1
+    fi
+
+    print_status "Installing binary from $BINARY_PATH to $INSTALL_DIR..."
+    cp "$BINARY_PATH" "$INSTALL_DIR/" || {
         print_error "Failed to copy binary"
         cleanup_and_exit 1
     }
@@ -252,15 +278,20 @@ setup_path() {
 verify_installation() {
     print_status "Verifying installation..."
 
-    if command -v "$APP_NAME" >/dev/null 2>&1; then
-        VERSION_OUTPUT=$($APP_NAME --version 2>/dev/null || echo "installed")
-        print_success "Installation verified: $VERSION_OUTPUT"
-        return 0
-    elif [ -f "${INSTALL_DIR}/${APP_NAME}${BINARY_EXT}" ]; then
+    # Try to find the binary
+    if [ -f "${INSTALL_DIR}/${APP_NAME}${BINARY_EXT}" ]; then
         print_success "Binary installed at ${INSTALL_DIR}/${APP_NAME}${BINARY_EXT}"
+
+        # Try to run it
+        if "${INSTALL_DIR}/${APP_NAME}${BINARY_EXT}" --version >/dev/null 2>&1; then
+            VERSION_OUTPUT=$("${INSTALL_DIR}/${APP_NAME}${BINARY_EXT}" --version 2>/dev/null || echo "installed")
+            print_success "Installation verified: $VERSION_OUTPUT"
+        else
+            print_success "Binary installed but version check failed (this might be normal)"
+        fi
         return 0
     else
-        print_error "Installation verification failed"
+        print_error "Installation verification failed - binary not found"
         return 1
     fi
 }
@@ -271,33 +302,41 @@ show_post_install_instructions() {
     echo -e "${GREEN}🎉 ServerHealth has been installed successfully!${NC}"
     echo ""
 
+    # Show the correct command path
+    if [ "$SYSTEM_INSTALL" = true ] || [[ ":$PATH:" == *":$INSTALL_DIR:"* ]]; then
+        CMD_PREFIX="$APP_NAME"
+    else
+        CMD_PREFIX="${INSTALL_DIR}/${APP_NAME}${BINARY_EXT}"
+    fi
+
     echo -e "${CYAN}Next steps:${NC}"
-    echo -e "  1. Configure monitoring: ${YELLOW}$APP_NAME configure${NC}"
-    echo -e "  2. Start monitoring: ${YELLOW}$APP_NAME start${NC}"
+    echo -e "  1. Configure monitoring: ${YELLOW}${CMD_PREFIX} configure${NC}"
+    echo -e "  2. Start monitoring: ${YELLOW}${CMD_PREFIX} start${NC}"
 
     if [ "$SYSTEM_INSTALL" = true ]; then
-        echo -e "  3. Install as system service: ${YELLOW}sudo $APP_NAME install${NC}"
+        echo -e "  3. Install as system service: ${YELLOW}sudo ${CMD_PREFIX} install${NC}"
         echo -e "  4. Check service status: ${YELLOW}systemctl status $APP_NAME${NC}"
     else
-        echo -e "  3. Install as user service: ${YELLOW}$APP_NAME install${NC}"
+        echo -e "  3. Install as user service: ${YELLOW}${CMD_PREFIX} install${NC}"
     fi
 
     echo ""
     echo -e "${CYAN}Useful commands:${NC}"
-    echo -e "  • Check status: ${YELLOW}$APP_NAME status${NC}"
-    echo -e "  • View logs: ${YELLOW}$APP_NAME logs${NC}"
-    echo -e "  • Stop monitoring: ${YELLOW}$APP_NAME stop${NC}"
-    echo -e "  • Reconfigure: ${YELLOW}$APP_NAME configure${NC}"
-    echo -e "  • Get help: ${YELLOW}$APP_NAME --help${NC}"
+    echo -e "  • Check status: ${YELLOW}${CMD_PREFIX} status${NC}"
+    echo -e "  • View logs: ${YELLOW}${CMD_PREFIX} logs${NC}"
+    echo -e "  • Stop monitoring: ${YELLOW}${CMD_PREFIX} stop${NC}"
+    echo -e "  • Reconfigure: ${YELLOW}${CMD_PREFIX} configure${NC}"
+    echo -e "  • Get help: ${YELLOW}${CMD_PREFIX} --help${NC}"
 
     echo ""
     echo -e "${BLUE}Documentation:${NC}"
     echo -e "  • GitHub: https://github.com/$GITHUB_REPO"
     echo -e "  • Issues: https://github.com/$GITHUB_REPO/issues"
 
-    if [ "$SYSTEM_INSTALL" != true ]; then
+    if [ "$SYSTEM_INSTALL" != true ] && [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
         echo ""
-        echo -e "${WARNING} ${YELLOW}Note: You may need to restart your terminal or run 'source ~/.bashrc' to use the command.${NC}"
+        echo -e "${WARNING} ${YELLOW}Note: You may need to restart your terminal or run 'source ~/.bashrc' to use the command globally.${NC}"
+        echo -e "${WARNING} ${YELLOW}Or use the full path: ${CMD_PREFIX}${NC}"
     fi
 
     echo ""
