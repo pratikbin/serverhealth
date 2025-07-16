@@ -27,10 +27,10 @@ WARNING="\033[0;33m\xE2\x9A\xA0\033[0m"
 print_header() {
     echo -e "${PURPLE}"
     echo "╔══════════════════════════════════════════════════════════════╗"
-    echo "║                    ServerHealth Installer                   ║"
+    echo "║                    ServerHealth Installer                    ║"
     echo "║                                                              ║"
-    echo "║  A comprehensive server monitoring tool with Slack          ║"
-    echo "║  integration for real-time alerts and notifications.        ║"
+    echo "║  A comprehensive server monitoring tool with Slack           ║"
+    echo "║  integration for real-time alerts and notifications.         ║"
     echo "╚══════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
 }
