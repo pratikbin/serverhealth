@@ -6,7 +6,7 @@
 set -e
 
 APP_NAME="serverhealth"
-GITHUB_REPO="kailashvele/serverhealth"  # Replace with your GitHub username
+GITHUB_REPO="kailashvele/serverhealth"
 LATEST_VERSION=""
 
 # Colors for output
@@ -116,6 +116,176 @@ check_root() {
     fi
 }
 
+# Function to find and cleanup old installations
+cleanup_old_installations() {
+    print_status "Checking for multiple installations..."
+
+    # Common installation locations
+    LOCATIONS=(
+        "/usr/local/bin/serverhealth"
+        "/usr/bin/serverhealth"
+        "$HOME/.local/bin/serverhealth"
+        "$HOME/bin/serverhealth"
+    )
+
+    FOUND_LOCATIONS=()
+
+    for location in "${LOCATIONS[@]}"; do
+        if [ -f "$location" ]; then
+            FOUND_LOCATIONS+=("$location")
+        fi
+    done
+
+    if [ ${#FOUND_LOCATIONS[@]} -gt 1 ]; then
+        print_warning "Multiple ServerHealth installations found:"
+        for location in "${FOUND_LOCATIONS[@]}"; do
+            echo "  • $location"
+        done
+        echo ""
+
+        if [ "$FORCE_INSTALL" = true ] || [ -n "$CI" ] || [ -n "$NON_INTERACTIVE" ] || [ ! -t 0 ]; then
+            print_status "Auto-cleaning old installations..."
+            for location in "${FOUND_LOCATIONS[@]}"; do
+                if [ "$location" != "${INSTALL_DIR}/${APP_NAME}" ]; then
+                    print_status "Removing $location..."
+                    rm -f "$location" || print_warning "Failed to remove $location"
+                fi
+            done
+        else
+            echo "Do you want to remove old installations?"
+            echo "  1) Remove all and install fresh"
+            echo "  2) Keep existing and install alongside"
+            echo "  3) Cancel installation"
+            echo ""
+            read -p "Please choose [1-3]: " choice
+
+            case $choice in
+                1)
+                    for location in "${FOUND_LOCATIONS[@]}"; do
+                        if [ "$location" != "${INSTALL_DIR}/${APP_NAME}" ]; then
+                            print_status "Removing $location..."
+                            rm -f "$location" || print_warning "Failed to remove $location"
+                        fi
+                    done
+                    ;;
+                2)
+                    print_status "Keeping existing installations"
+                    ;;
+                3|*)
+                    print_status "Installation cancelled"
+                    exit 0
+                    ;;
+            esac
+        fi
+    fi
+}
+
+# Function to check for running services
+check_running_services() {
+    print_status "Checking for running ServerHealth services..."
+
+    SERVICE_RUNNING=false
+    DAEMON_RUNNING=false
+
+    # Check systemd service (Linux)
+    if command -v systemctl >/dev/null 2>&1; then
+        if systemctl is-active --quiet serverhealth 2>/dev/null; then
+            SERVICE_RUNNING=true
+            print_warning "ServerHealth systemd service is currently running"
+        fi
+    fi
+
+    # Check launchd service (macOS)
+    if command -v launchctl >/dev/null 2>&1; then
+        if launchctl list | grep -q serverhealth 2>/dev/null; then
+            SERVICE_RUNNING=true
+            print_warning "ServerHealth launchd service is currently running"
+        fi
+    fi
+
+    # Check for daemon process
+    if pgrep -f "serverhealth.*daemon" >/dev/null 2>&1; then
+        DAEMON_RUNNING=true
+        print_warning "ServerHealth daemon process is currently running"
+    fi
+
+    # Handle running services
+    if [ "$SERVICE_RUNNING" = true ] || [ "$DAEMON_RUNNING" = true ]; then
+        echo ""
+        print_warning "ServerHealth is currently running."
+
+        if [ "$FORCE_INSTALL" = true ] || [ -n "$CI" ] || [ -n "$NON_INTERACTIVE" ] || [ ! -t 0 ]; then
+            print_status "Auto-stopping services for update..."
+            stop_existing_services
+        else
+            echo ""
+            echo "Options:"
+            echo "  1) Stop services and continue installation"
+            echo "  2) Continue without stopping (may cause issues)"
+            echo "  3) Cancel installation"
+            echo ""
+            read -p "Please choose [1-3]: " choice
+
+            case $choice in
+                1)
+                    stop_existing_services
+                    ;;
+                2)
+                    print_warning "Continuing with services running..."
+                    ;;
+                3|*)
+                    print_status "Installation cancelled"
+                    exit 0
+                    ;;
+            esac
+        fi
+    fi
+}
+
+# Function to stop existing services
+stop_existing_services() {
+    print_status "Stopping existing ServerHealth services..."
+
+    # Stop systemd service
+    if command -v systemctl >/dev/null 2>&1; then
+        if systemctl is-active --quiet serverhealth 2>/dev/null; then
+            print_status "Stopping systemd service..."
+            if [ "$EUID" -eq 0 ]; then
+                systemctl stop serverhealth || print_warning "Failed to stop systemd service"
+            else
+                sudo systemctl stop serverhealth 2>/dev/null || print_warning "Failed to stop systemd service"
+            fi
+        fi
+    fi
+
+    # Stop launchd service
+    if command -v launchctl >/dev/null 2>&1; then
+        if launchctl list | grep -q serverhealth 2>/dev/null; then
+            print_status "Stopping launchd service..."
+            launchctl unload ~/Library/LaunchAgents/serverhealth.plist 2>/dev/null || true
+            sudo launchctl unload /Library/LaunchDaemons/serverhealth.plist 2>/dev/null || true
+        fi
+    fi
+
+    # Stop daemon process
+    if pgrep -f "serverhealth.*daemon" >/dev/null 2>&1; then
+        print_status "Stopping daemon process..."
+        pkill -f "serverhealth.*daemon" || print_warning "Failed to stop daemon process"
+        sleep 2
+    fi
+
+    print_success "Services stopped"
+}
+
+# Function to backup existing installation
+backup_existing_installation() {
+    if [ -f "${INSTALL_DIR}/${APP_NAME}" ]; then
+        BACKUP_FILE="${INSTALL_DIR}/${APP_NAME}.backup.$(date +%Y%m%d_%H%M%S)"
+        print_status "Backing up existing installation to $BACKUP_FILE"
+        cp "${INSTALL_DIR}/${APP_NAME}" "$BACKUP_FILE" || print_warning "Failed to create backup"
+    fi
+}
+
 # Get latest version from GitHub
 get_latest_version() {
     print_status "Fetching latest version..."
@@ -141,15 +311,9 @@ get_latest_version() {
 download_and_install() {
     print_status "Downloading and installing..."
 
-    # Construct download URL - handle both regular versions and dev versions
+    # Construct download URL
     PACKAGE_NAME="${APP_NAME}-${LATEST_VERSION}-${OS}-${ARCH}"
-
-    # For the download URL, we need to add 'v' prefix if it's not a dev version
-    if [[ "$LATEST_VERSION" == dev-* ]]; then
-        TAG_NAME="v${LATEST_VERSION}"
-    else
-        TAG_NAME="v${LATEST_VERSION}"
-    fi
+    TAG_NAME="v${LATEST_VERSION}"
 
     if [ "$OS" = "windows" ]; then
         DOWNLOAD_URL="https://github.com/$GITHUB_REPO/releases/download/${TAG_NAME}/${PACKAGE_NAME}.zip"
@@ -194,10 +358,6 @@ download_and_install() {
             cleanup_and_exit 1
         }
     fi
-
-    # Debug: show what was extracted
-    print_status "Extracted contents:"
-    ls -la
 
     # Install binary - the extracted directory should contain the binary
     BINARY_PATH=""
@@ -263,11 +423,16 @@ setup_path() {
     esac
 
     if [ -f "$PROFILE_FILE" ]; then
-        echo "" >> "$PROFILE_FILE"
-        echo "# Added by ServerHealth installer" >> "$PROFILE_FILE"
-        echo "export PATH=\"$INSTALL_DIR:\$PATH\"" >> "$PROFILE_FILE"
-        print_success "Added $INSTALL_DIR to PATH in $PROFILE_FILE"
-        print_warning "Please restart your terminal or run: source $PROFILE_FILE"
+        # Check if already added
+        if ! grep -q "Added by ServerHealth installer" "$PROFILE_FILE"; then
+            echo "" >> "$PROFILE_FILE"
+            echo "# Added by ServerHealth installer" >> "$PROFILE_FILE"
+            echo "export PATH=\"$INSTALL_DIR:\$PATH\"" >> "$PROFILE_FILE"
+            print_success "Added $INSTALL_DIR to PATH in $PROFILE_FILE"
+            print_warning "Please restart your terminal or run: source $PROFILE_FILE"
+        else
+            print_success "PATH already configured"
+        fi
     else
         print_warning "Could not find shell profile file"
         print_warning "Please add $INSTALL_DIR to your PATH manually"
@@ -287,12 +452,36 @@ verify_installation() {
             VERSION_OUTPUT=$("${INSTALL_DIR}/${APP_NAME}${BINARY_EXT}" --version 2>/dev/null || echo "installed")
             print_success "Installation verified: $VERSION_OUTPUT"
         else
-            print_success "Binary installed but version check failed (this might be normal)"
+            print_success "Binary installed successfully"
         fi
         return 0
     else
         print_error "Installation verification failed - binary not found"
         return 1
+    fi
+}
+
+# Restart services if they were running
+restart_services() {
+    if [ "$SERVICE_RUNNING" = true ]; then
+        print_status "Restarting services..."
+
+        # Restart systemd service
+        if command -v systemctl >/dev/null 2>&1; then
+            if [ "$EUID" -eq 0 ]; then
+                systemctl start serverhealth 2>/dev/null || print_warning "Failed to restart systemd service"
+            else
+                sudo systemctl start serverhealth 2>/dev/null || print_warning "Failed to restart systemd service"
+            fi
+            print_success "SystemD service restarted"
+        fi
+
+        # Restart launchd service
+        if command -v launchctl >/dev/null 2>&1; then
+            launchctl load ~/Library/LaunchAgents/serverhealth.plist 2>/dev/null || true
+            sudo launchctl load /Library/LaunchDaemons/serverhealth.plist 2>/dev/null || true
+            print_success "LaunchD service restarted"
+        fi
     fi
 }
 
@@ -307,6 +496,13 @@ show_post_install_instructions() {
         CMD_PREFIX="$APP_NAME"
     else
         CMD_PREFIX="${INSTALL_DIR}/${APP_NAME}${BINARY_EXT}"
+    fi
+
+    # Show version if available
+    if command -v "$APP_NAME" >/dev/null 2>&1 || [ -f "${INSTALL_DIR}/${APP_NAME}${BINARY_EXT}" ]; then
+        VERSION_INFO=$("${INSTALL_DIR}/${APP_NAME}${BINARY_EXT}" --version 2>/dev/null || echo "v${LATEST_VERSION}")
+        echo -e "${CYAN}Installed version: ${GREEN}${VERSION_INFO}${NC}"
+        echo ""
     fi
 
     echo -e "${CYAN}Next steps:${NC}"
@@ -431,17 +627,38 @@ show_help() {
     echo "  $0                          # Install latest version"
     echo "  $0 --version 1.2.0          # Install specific version"
     echo "  $0 --user                   # Install to user directory"
+    echo "  $0 --force                  # Force reinstall"
     echo ""
 }
 
-# Check if already installed
+# Enhanced check for existing installation
 check_existing_installation() {
     if [ "$FORCE_INSTALL" = true ]; then
         return
     fi
 
+    # Check if already installed
     if command -v "$APP_NAME" >/dev/null 2>&1; then
-        print_warning "ServerHealth is already installed"
+        CURRENT_VERSION=$("$APP_NAME" --version 2>/dev/null | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' || echo "unknown")
+        print_warning "ServerHealth v$CURRENT_VERSION is already installed"
+
+        # If CI/non-interactive environment, auto-update
+        if [ -n "$CI" ] || [ -n "$NON_INTERACTIVE" ] || [ ! -t 0 ]; then
+            print_status "Non-interactive mode detected - updating to latest version"
+            return
+        fi
+
+        # Compare versions if possible
+        if [ "$CURRENT_VERSION" != "unknown" ] && [ -n "$LATEST_VERSION" ]; then
+            if [ "$CURRENT_VERSION" = "$LATEST_VERSION" ]; then
+                print_success "Already running latest version ($CURRENT_VERSION)"
+                echo ""
+                echo "Use --force to reinstall anyway"
+                exit 0
+            else
+                print_status "Update available: $CURRENT_VERSION → $LATEST_VERSION"
+            fi
+        fi
 
         echo ""
         echo "Do you want to:"
@@ -472,7 +689,6 @@ main() {
 
     handle_arguments "$@"
     check_dependencies
-    check_existing_installation
     detect_platform
 
     # Force user install if requested
@@ -489,10 +705,16 @@ main() {
         get_latest_version
     fi
 
+    check_existing_installation
+    check_running_services
+    cleanup_old_installations
+    backup_existing_installation
+
     download_and_install
     setup_path
 
     if verify_installation; then
+        restart_services
         show_post_install_instructions
     else
         print_error "Installation failed"
