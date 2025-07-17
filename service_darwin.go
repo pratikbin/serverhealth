@@ -57,7 +57,7 @@ func installService(config *Config) error {
 	<key>ProgramArguments</key>
 	<array>
 		<string>%s</string>
-		<string>start</string>
+		<string>daemon</string>
 	</array>
 	<key>RunAtLoad</key>
 	<true/>
@@ -106,7 +106,10 @@ func uninstallService(serviceName string) error {
 
 	// Unload service
 	cmd := exec.Command("launchctl", "unload", plistPath)
-	cmd.Run() // Don't fail if already unloaded
+	if err := cmd.Run(); err != nil {
+		// Don't fail if already unloaded, just log the error
+		fmt.Printf("Warning: failed to unload service (may already be unloaded): %v\n", err)
+	}
 
 	// Remove plist file
 	if err := os.Remove(plistPath); err != nil && !os.IsNotExist(err) {

@@ -44,7 +44,7 @@ func installService(config *Config) error {
 
 	// Create service using sc command
 	cmd := exec.Command("sc", "create", serviceName,
-		"binPath=", fmt.Sprintf("\"%s\" start", execPath),
+		"binPath=", fmt.Sprintf("\"%s\" daemon", execPath),
 		"DisplayName=", "Server Health Monitor",
 		"start=", "auto",
 		"depend=", "tcpip")

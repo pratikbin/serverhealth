@@ -139,19 +139,19 @@ func parseUnixMemoryUsage(output string) (float64, error) {
 func parseWindowsDiskUsage(output string) (int, error) {
 	// TODO: Implement proper Windows disk usage parsing
 	// This is a simplified implementation
-	return 0, fmt.Errorf("Windows disk usage parsing not implemented")
+	return 0, fmt.Errorf("windows disk usage parsing not implemented")
 }
 
 // parseWindowsCPUUsage parses Windows CPU usage output
 func parseWindowsCPUUsage(output string) (float64, error) {
 	// TODO: Implement proper Windows CPU usage parsing
 	// This is a simplified implementation
-	return 0.0, fmt.Errorf("Windows CPU usage parsing not implemented")
+	return 0.0, fmt.Errorf("windows CPU usage parsing not implemented")
 }
 
 // parseWindowsMemoryUsage parses Windows memory usage output
 func parseWindowsMemoryUsage(output string) (float64, error) {
 	// TODO: Implement proper Windows memory usage parsing
 	// This is a simplified implementation
-	return 0.0, fmt.Errorf("Windows memory usage parsing not implemented")
+	return 0.0, fmt.Errorf("windows memory usage parsing not implemented")
 }
