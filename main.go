@@ -19,11 +19,10 @@ var (
 	yellow = color.New(color.FgYellow).SprintFunc()
 	blue   = color.New(color.FgBlue).SprintFunc()
 	bold   = color.New(color.Bold).SprintFunc()
-	faint  = color.New(color.Faint).SprintFunc()
 )
 
 func main() {
-	var rootCmd = &cobra.Command{
+	rootCmd := &cobra.Command{
 		Use:     appName,
 		Short:   "A comprehensive server health monitoring tool",
 		Long:    `ServerHealth is a CLI tool that monitors server health metrics and sends notifications to Slack.`,

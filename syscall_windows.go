@@ -8,6 +8,8 @@ import (
 	"syscall"
 )
 
+// setPlatformSysProcAttr sets platform-specific process attributes for Windows systems
+// nolint:unused // This function is kept for potential future background process functionality
 func setPlatformSysProcAttr(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		HideWindow:    true,

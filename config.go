@@ -132,30 +132,84 @@ func LoadConfig(config *Config) error {
 	// Set environment variable prefix
 	viper.SetEnvPrefix("SERVERHEALTH")
 
-	// Bind environment variables for new structure
-	viper.BindEnv("disk.enabled", "SERVERHEALTH_DISK_ENABLED")
-	viper.BindEnv("disk.threshold", "SERVERHEALTH_DISK_THRESHOLD")
-	viper.BindEnv("disk.check_interval", "SERVERHEALTH_DISK_CHECK_INTERVAL")
-	viper.BindEnv("cpu.enabled", "SERVERHEALTH_CPU_ENABLED")
-	viper.BindEnv("cpu.threshold", "SERVERHEALTH_CPU_THRESHOLD")
-	viper.BindEnv("cpu.check_interval", "SERVERHEALTH_CPU_CHECK_INTERVAL")
-	viper.BindEnv("memory.enabled", "SERVERHEALTH_MEMORY_ENABLED")
-	viper.BindEnv("memory.threshold", "SERVERHEALTH_MEMORY_THRESHOLD")
-	viper.BindEnv("memory.check_interval", "SERVERHEALTH_MEMORY_CHECK_INTERVAL")
-	viper.BindEnv("log_level", "SERVERHEALTH_LOG_LEVEL")
-	viper.BindEnv("service_name", "SERVERHEALTH_SERVICE_NAME")
+	// Bind environment variables
+	if err := viper.BindEnv("disk.enabled", "SERVERHEALTH_DISK_ENABLED"); err != nil {
+		return fmt.Errorf("failed to bind disk.enabled env var: %w", err)
+	}
+	if err := viper.BindEnv("disk.threshold", "SERVERHEALTH_DISK_THRESHOLD"); err != nil {
+		return fmt.Errorf("failed to bind disk.threshold env var: %w", err)
+	}
+	if err := viper.BindEnv("disk.check_interval", "SERVERHEALTH_DISK_CHECK_INTERVAL"); err != nil {
+		return fmt.Errorf("failed to bind disk.check_interval env var: %w", err)
+	}
+	if err := viper.BindEnv("disk.max_daily_alerts", "SERVERHEALTH_DISK_MAX_DAILY_ALERTS"); err != nil {
+		return fmt.Errorf("failed to bind disk.max_daily_alerts env var: %w", err)
+	}
+
+	if err := viper.BindEnv("cpu.enabled", "SERVERHEALTH_CPU_ENABLED"); err != nil {
+		return fmt.Errorf("failed to bind cpu.enabled env var: %w", err)
+	}
+	if err := viper.BindEnv("cpu.threshold", "SERVERHEALTH_CPU_THRESHOLD"); err != nil {
+		return fmt.Errorf("failed to bind cpu.threshold env var: %w", err)
+	}
+	if err := viper.BindEnv("cpu.check_interval", "SERVERHEALTH_CPU_CHECK_INTERVAL"); err != nil {
+		return fmt.Errorf("failed to bind cpu.check_interval env var: %w", err)
+	}
+	if err := viper.BindEnv("cpu.max_daily_alerts", "SERVERHEALTH_CPU_MAX_DAILY_ALERTS"); err != nil {
+		return fmt.Errorf("failed to bind cpu.max_daily_alerts env var: %w", err)
+	}
+
+	if err := viper.BindEnv("memory.enabled", "SERVERHEALTH_MEMORY_ENABLED"); err != nil {
+		return fmt.Errorf("failed to bind memory.enabled env var: %w", err)
+	}
+	if err := viper.BindEnv("memory.threshold", "SERVERHEALTH_MEMORY_THRESHOLD"); err != nil {
+		return fmt.Errorf("failed to bind memory.threshold env var: %w", err)
+	}
+	if err := viper.BindEnv("memory.check_interval", "SERVERHEALTH_MEMORY_CHECK_INTERVAL"); err != nil {
+		return fmt.Errorf("failed to bind memory.check_interval env var: %w", err)
+	}
+	if err := viper.BindEnv("memory.max_daily_alerts", "SERVERHEALTH_MEMORY_MAX_DAILY_ALERTS"); err != nil {
+		return fmt.Errorf("failed to bind memory.max_daily_alerts env var: %w", err)
+	}
+
+	if err := viper.BindEnv("log_level", "SERVERHEALTH_LOG_LEVEL"); err != nil {
+		return fmt.Errorf("failed to bind log_level env var: %w", err)
+	}
+	if err := viper.BindEnv("service_name", "SERVERHEALTH_SERVICE_NAME"); err != nil {
+		return fmt.Errorf("failed to bind service_name env var: %w", err)
+	}
 
 	// Legacy environment variable support
-	viper.BindEnv("slack_disk_webhook_url", "SERVERHEALTH_SLACK_DISK_WEBHOOK_URL")
-	viper.BindEnv("slack_cpu_memory_webhook_url", "SERVERHEALTH_SLACK_CPU_MEMORY_WEBHOOK_URL")
-	viper.BindEnv("disk_enabled", "SERVERHEALTH_DISK_ENABLED")
-	viper.BindEnv("cpu_enabled", "SERVERHEALTH_CPU_ENABLED")
-	viper.BindEnv("memory_enabled", "SERVERHEALTH_MEMORY_ENABLED")
-	viper.BindEnv("disk_threshold", "SERVERHEALTH_DISK_THRESHOLD")
-	viper.BindEnv("cpu_threshold", "SERVERHEALTH_CPU_THRESHOLD")
-	viper.BindEnv("memory_threshold", "SERVERHEALTH_MEMORY_THRESHOLD")
-	viper.BindEnv("check_interval_minutes", "SERVERHEALTH_CHECK_INTERVAL_MINUTES")
-	viper.BindEnv("disk_check_interval_hours", "SERVERHEALTH_DISK_CHECK_INTERVAL_HOURS")
+	if err := viper.BindEnv("slack_disk_webhook_url", "SERVERHEALTH_SLACK_DISK_WEBHOOK_URL"); err != nil {
+		return fmt.Errorf("failed to bind slack_disk_webhook_url env var: %w", err)
+	}
+	if err := viper.BindEnv("slack_cpu_memory_webhook_url", "SERVERHEALTH_SLACK_CPU_MEMORY_WEBHOOK_URL"); err != nil {
+		return fmt.Errorf("failed to bind slack_cpu_memory_webhook_url env var: %w", err)
+	}
+	if err := viper.BindEnv("disk_enabled", "SERVERHEALTH_DISK_ENABLED"); err != nil {
+		return fmt.Errorf("failed to bind disk_enabled env var: %w", err)
+	}
+	if err := viper.BindEnv("cpu_enabled", "SERVERHEALTH_CPU_ENABLED"); err != nil {
+		return fmt.Errorf("failed to bind cpu_enabled env var: %w", err)
+	}
+	if err := viper.BindEnv("memory_enabled", "SERVERHEALTH_MEMORY_ENABLED"); err != nil {
+		return fmt.Errorf("failed to bind memory_enabled env var: %w", err)
+	}
+	if err := viper.BindEnv("disk_threshold", "SERVERHEALTH_DISK_THRESHOLD"); err != nil {
+		return fmt.Errorf("failed to bind disk_threshold env var: %w", err)
+	}
+	if err := viper.BindEnv("cpu_threshold", "SERVERHEALTH_CPU_THRESHOLD"); err != nil {
+		return fmt.Errorf("failed to bind cpu_threshold env var: %w", err)
+	}
+	if err := viper.BindEnv("memory_threshold", "SERVERHEALTH_MEMORY_THRESHOLD"); err != nil {
+		return fmt.Errorf("failed to bind memory_threshold env var: %w", err)
+	}
+	if err := viper.BindEnv("check_interval_minutes", "SERVERHEALTH_CHECK_INTERVAL_MINUTES"); err != nil {
+		return fmt.Errorf("failed to bind check_interval_minutes env var: %w", err)
+	}
+	if err := viper.BindEnv("disk_check_interval_hours", "SERVERHEALTH_DISK_CHECK_INTERVAL_HOURS"); err != nil {
+		return fmt.Errorf("failed to bind disk_check_interval_hours env var: %w", err)
+	}
 
 	if err := viper.ReadInConfig(); err != nil {
 		// If config file doesn't exist, that's okay - we'll use defaults

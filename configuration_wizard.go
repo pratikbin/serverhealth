@@ -257,7 +257,7 @@ func (w *ConfigurationWizard) configureSlackWebhooks(config *Config) error {
 }
 
 func (w *ConfigurationWizard) configureNotificationProvider(config *Config, providerType string) error {
-	fmt.Printf("\n%s Configuration\n", strings.Title(providerType))
+	fmt.Printf("\n%s Configuration\n", strings.ToUpper(providerType[:1])+providerType[1:])
 	fmt.Println("═══════════════════════════════════")
 
 	// Find existing notification or create new one

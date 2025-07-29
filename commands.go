@@ -94,89 +94,97 @@ func NewDaemonCmd() *cobra.Command {
 	}
 }
 
-// Configure command implementation
-func runConfigure(cmd *cobra.Command, args []string) {
+// runConfigure runs the configuration wizard
+func runConfigure(_ *cobra.Command, _ []string) {
 	fmt.Println(bold("🔧 ServerHealth Configuration"))
 	fmt.Println("═══════════════════════════════════════")
 
 	config := NewConfig()
 
-	// Load existing config if it exists
-	if err := LoadConfig(config); err != nil {
+	// Check if configuration already exists
+	configDir := getConfigDir()
+	configFile := filepath.Join(configDir, configFileName+".yaml")
+	if _, err := os.Stat(configFile); err == nil {
+		fmt.Println(yellow("Existing configuration found. Loading current settings..."))
+		if err := LoadConfig(config); err != nil {
+			fmt.Println(red("Failed to load existing configuration. Creating new configuration..."))
+		}
+	} else {
 		fmt.Println(yellow("No existing configuration found. Creating new configuration..."))
 	}
 
-	// Welcome message
-	fmt.Println()
-	fmt.Println(blue("Welcome to ServerHealth!"))
-	fmt.Println("This tool will help you monitor your server's health and send notifications to Slack.")
-	fmt.Println()
-	fmt.Println("Let's configure your monitoring preferences:")
-	fmt.Println()
-
-	// Run configuration wizard
-	wizard := NewConfigurationWizard()
+	wizard := &ConfigurationWizard{}
 	if err := wizard.Run(config); err != nil {
-		fmt.Println(red("Configuration failed:"), err)
+		fmt.Println(red("Configuration failed: " + err.Error()))
 		os.Exit(1)
 	}
 
-	// Save configuration
-	if err := SaveConfig(config); err != nil {
-		fmt.Println(red("Failed to save configuration:"), err)
-		os.Exit(1)
-	}
-
-	fmt.Println()
-	fmt.Println(green("✅ Configuration saved successfully!"))
-	fmt.Println("Run '" + bold(appName+" start") + "' to begin monitoring.")
+	fmt.Println(green("Configuration saved successfully!"))
 }
 
-// Start command implementation with background support
-func runStart(cmd *cobra.Command, args []string) {
+// runStart starts the monitoring service
+func runStart(_ *cobra.Command, _ []string) {
 	config := NewConfig()
 	if err := LoadConfig(config); err != nil {
-		fmt.Println(red("No configuration found. Please run:"), bold(appName+" configure"))
+		fmt.Println(red("Failed to load configuration: " + err.Error()))
 		os.Exit(1)
 	}
 
-	// Check for background/daemon flags
-	background, _ := cmd.Flags().GetBool("background")
-	daemon, _ := cmd.Flags().GetBool("daemon")
-
-	if background || daemon {
-		startInBackground()
-		return
+	if err := config.Validate(); err != nil {
+		fmt.Println(red("Configuration validation failed: " + err.Error()))
+		os.Exit(1)
 	}
 
 	// Check if already running
-	if isAlreadyRunning() {
-		fmt.Println(yellow("⚠️  ServerHealth is already running"))
-		fmt.Println("Use '" + bold(appName+" status") + "' to check status")
-		fmt.Println("Use '" + bold(appName+" stop") + "' to stop")
+	pidFile := getPIDFile()
+	if checkPIDFile(pidFile) {
+		fmt.Println(yellow("ServerHealth is already running."))
 		return
 	}
 
-	// Normal foreground start
-	startForeground(config)
+	// Create logger
+	logger := log.New(os.Stdout, "", log.LstdFlags)
+
+	// Create and start monitor
+	monitor := NewMonitor(config, logger)
+	monitor.Start()
 }
 
-// Status command implementation
-func runStatus(cmd *cobra.Command, args []string) {
-	fmt.Println(bold("📊 ServerHealth Status"))
-	fmt.Println("═══════════════════════════════")
-
+// runStatus shows the current status and configuration
+func runStatus(_ *cobra.Command, _ []string) {
 	config := NewConfig()
 	if err := LoadConfig(config); err != nil {
-		fmt.Println(red("❌ Configuration not found"))
-		fmt.Println("Run '" + bold(appName+" configure") + "' to set up monitoring")
-		return
+		fmt.Println(red("Failed to load configuration: " + err.Error()))
+		os.Exit(1)
 	}
 
-	fmt.Println(green("✅ Configuration found"))
-	fmt.Println()
-	fmt.Println(bold("Monitoring Configuration:"))
+	showStatus(config)
+}
 
+// showStatus displays the current status and configuration
+func showStatus(config *Config) {
+	fmt.Println(bold("📊 ServerHealth Status"))
+	fmt.Println("═══════════════════════════════════════")
+
+	// Check if service is running
+	pidFile := getPIDFile()
+	isRunning := false
+	if checkPIDFile(pidFile) {
+		isRunning = true
+	}
+
+	if isRunning {
+		fmt.Println(green("✅ Service Status: Running"))
+	} else {
+		fmt.Println(red("❌ Service Status: Stopped"))
+	}
+
+	fmt.Println("\n📋 Configuration:")
+	fmt.Printf("  • Log Level: %s\n", config.LogLevel)
+	fmt.Printf("  • Service Name: %s\n", config.ServiceName)
+
+	// Show monitoring configuration
+	fmt.Println("\n🔍 Monitoring Configuration:")
 	if config.Disk.Enabled {
 		fmt.Printf("  • Disk usage (threshold: %d%%, check every %d hours, max alerts: %d/day)\n",
 			config.Disk.Threshold, config.Disk.CheckInterval, config.Disk.MaxDailyAlerts)
@@ -190,123 +198,41 @@ func runStatus(cmd *cobra.Command, args []string) {
 			config.Memory.Threshold, config.Memory.CheckInterval, config.Memory.MaxDailyAlerts)
 	}
 
-	fmt.Println()
-	fmt.Println(bold("Runtime Status:"))
-
-	isRunning := false
-	runningAs := ""
-
-	// Check if service is running
-	if IsServiceRunning(config.ServiceName) {
-		fmt.Println(green("✅ Running as system service"))
-		isRunning = true
-		runningAs = "system service"
-	}
-
-	// Check if daemon process is running
-	pidFile := filepath.Join(getPIDDir(), appName+".pid")
-	if checkPIDFile(pidFile) {
-		if isRunning {
-			fmt.Println(yellow("⚠️  Also running as daemon process (this might be a problem)"))
-		} else {
-			fmt.Println(green("✅ Running as daemon process"))
-			isRunning = true
-			runningAs = "daemon process"
-		}
-
-		// Show PID
-		if data, err := os.ReadFile(pidFile); err == nil {
-			pidStr := string(data)
-			if pid, err := strconv.Atoi(pidStr[:len(pidStr)-1]); err == nil {
-				fmt.Printf("   PID: %d\n", pid)
-			}
-		}
-	}
-
-	if !isRunning {
-		fmt.Println(red("❌ ServerHealth is not running"))
-		fmt.Println()
-		fmt.Println(bold("To start ServerHealth:"))
-		fmt.Println("  • Foreground: " + bold(appName+" start"))
-		fmt.Println("  • Background: " + bold(appName+" start --background"))
-		fmt.Println("  • As service: " + bold(appName+" install") + " then " + bold("systemctl start "+appName))
-		return
-	}
-
-	// Show additional info if running
-	fmt.Println()
-	fmt.Println(bold("Additional Info:"))
-
-	if runningAs == "daemon process" {
-		logFile := filepath.Join(getLogDir(), appName+".log")
-		fmt.Printf("  • Log file: %s\n", logFile)
-		fmt.Printf("  • PID file: %s\n", pidFile)
-	}
-
 	// Show notification providers
-	if len(config.Notifications) > 0 {
-		fmt.Println("  • Notification providers:")
+	fmt.Println("\n🔔 Notification Providers:")
+	if len(config.Notifications) == 0 {
+		fmt.Println("  • No notification providers configured")
+	} else {
 		for _, notification := range config.Notifications {
 			if notification.Enabled {
 				switch notification.Type {
-				case "slack":
-					fmt.Printf("    - Slack: %s\n", notification.WebhookURL[:30]+"...")
-				case "telegram":
-					fmt.Printf("    - Telegram: Bot token configured\n")
-				case "discord":
-					fmt.Printf("    - Discord: %s\n", notification.WebhookURL[:30]+"...")
+				case string(NotificationTypeSlack):
+					fmt.Printf("  • Slack: %s\n", notification.WebhookURL)
+				case string(NotificationTypeTelegram):
+					fmt.Printf("  • Telegram: %s\n", notification.ChatID)
+				case string(NotificationTypeDiscord):
+					fmt.Printf("  • Discord: %s\n", notification.WebhookURL)
 				}
 			}
 		}
-	} else {
-		fmt.Println("  • No notification providers configured")
 	}
-
-	fmt.Println()
-	fmt.Println(bold("Commands:"))
-	fmt.Println("  • Stop: " + bold(appName+" stop"))
-	fmt.Println("  • View logs: " + bold(appName+" logs"))
-	fmt.Println("  • Reconfigure: " + bold(appName+" configure"))
 }
 
-// Stop command implementation
-func runStop(cmd *cobra.Command, args []string) {
-	fmt.Println(bold("🛑 Stopping ServerHealth"))
-	fmt.Println("══════════════════════════════")
-
-	config := NewConfig()
-	if err := LoadConfig(config); err != nil {
-		config.ServiceName = appName // Use default if config not found
+// runStop stops the monitoring service
+func runStop(_ *cobra.Command, _ []string) {
+	pidFile := getPIDFile()
+	if !checkPIDFile(pidFile) {
+		fmt.Println(yellow("ServerHealth is not running."))
+		return
 	}
 
-	stopped := false
-
-	// First, try to stop system service
-	if IsServiceRunning(config.ServiceName) {
-		fmt.Println("Stopping system service...")
-		if err := StopService(config.ServiceName); err != nil {
-			fmt.Println(red("Failed to stop service:"), err)
-		} else {
-			fmt.Println(green("✅ System service stopped"))
-			stopped = true
-		}
+	fmt.Println("Stopping ServerHealth...")
+	if err := stopDaemonProcess(pidFile); err != nil {
+		fmt.Println(red("Failed to stop ServerHealth: " + err.Error()))
+		os.Exit(1)
 	}
 
-	// Then, try to stop daemon process
-	pidFile := filepath.Join(getPIDDir(), appName+".pid")
-	if checkPIDFile(pidFile) {
-		fmt.Println("Stopping daemon process...")
-		if err := stopDaemonProcess(pidFile); err != nil {
-			fmt.Println(red("Failed to stop daemon:"), err)
-		} else {
-			fmt.Println(green("✅ Daemon process stopped"))
-			stopped = true
-		}
-	}
-
-	if !stopped {
-		fmt.Println(yellow("⚠️  ServerHealth is not running"))
-	}
+	fmt.Println(green("ServerHealth stopped successfully."))
 }
 
 // Install command implementation
@@ -389,18 +315,28 @@ func runLogs(cmd *cobra.Command, args []string) {
 func runDaemon(cmd *cobra.Command, args []string) {
 	config := NewConfig()
 	if err := LoadConfig(config); err != nil {
-		log.Fatal("No configuration found. Please run 'serverhealth configure' first.")
+		fmt.Println(red("Failed to load configuration: " + err.Error()))
+		os.Exit(1)
 	}
 
-	// Setup logging to file
-	logFile := filepath.Join(getLogDir(), appName+".log")
+	if err := config.Validate(); err != nil {
+		fmt.Println(red("Configuration validation failed: " + err.Error()))
+		os.Exit(1)
+	}
+
+	// Create log file
+	logDir := getLogDir()
+	logFile := filepath.Join(logDir, appName+".log")
+
 	f, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o666)
 	if err != nil {
-		log.Fatal("Failed to open log file:", err)
+		fmt.Println(red("Failed to create log file: " + err.Error()))
+		os.Exit(1)
 	}
+
 	defer func() {
 		if err := f.Close(); err != nil {
-			log.Printf("Error closing log file: %v", err)
+			fmt.Println(red("Failed to close log file: " + err.Error()))
 		}
 	}()
 
@@ -408,8 +344,7 @@ func runDaemon(cmd *cobra.Command, args []string) {
 	logger := log.New(f, "[ServerHealth] ", log.LstdFlags)
 	logger.Println("Starting ServerHealth daemon...")
 
-	monitor := NewMonitor(config)
-	monitor.SetLogger(logger)
+	monitor := NewMonitor(config, logger)
 
 	// Setup PID file cleanup
 	pidFile := filepath.Join(getPIDDir(), appName+".pid")
@@ -434,121 +369,6 @@ func runDaemon(cmd *cobra.Command, args []string) {
 	logger.Println("Received shutdown signal, stopping daemon...")
 	monitor.Stop()
 	logger.Println("ServerHealth daemon stopped")
-}
-
-// Background start implementation
-func startInBackground() {
-	// Check if already running
-	if isAlreadyRunning() {
-		fmt.Println(yellow("⚠️  ServerHealth is already running"))
-		return
-	}
-
-	fmt.Println(bold("🚀 Starting ServerHealth in background"))
-	fmt.Println("═══════════════════════════════════════")
-
-	// Get current executable path
-	execPath, err := os.Executable()
-	if err != nil {
-		fmt.Println(red("Failed to get executable path:"), err)
-		os.Exit(1)
-	}
-
-	// Ensure directories exist
-	if err := ensureDirectories(); err != nil {
-		fmt.Println(red("Failed to create directories:"), err)
-		os.Exit(1)
-	}
-
-	pidDir := getPIDDir()
-	logDir := getLogDir()
-	pidFile := filepath.Join(pidDir, appName+".pid")
-	logFile := filepath.Join(logDir, appName+".log")
-
-	// Start daemon process
-	cmd := exec.Command(execPath, "daemon")
-
-	// Setup logging
-	f, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o666)
-	if err != nil {
-		fmt.Println(red("Failed to open log file:"), err)
-		os.Exit(1)
-	}
-
-	cmd.Stdout = f
-	cmd.Stderr = f
-
-	// Detach from parent process (platform-specific)
-	setPlatformSysProcAttr(cmd)
-
-	// Start the process
-	if err := cmd.Start(); err != nil {
-		fmt.Println(red("Failed to start daemon:"), err)
-		if closeErr := f.Close(); closeErr != nil {
-			fmt.Printf("Error closing file: %v\n", closeErr)
-		}
-		os.Exit(1)
-	}
-
-	// Write PID file
-	pidContent := fmt.Sprintf("%d\n", cmd.Process.Pid)
-	if err := os.WriteFile(pidFile, []byte(pidContent), 0o644); err != nil {
-		fmt.Println(red("Failed to write PID file:"), err)
-		if killErr := cmd.Process.Kill(); killErr != nil {
-			fmt.Printf("Error killing process: %v\n", killErr)
-		}
-		if closeErr := f.Close(); closeErr != nil {
-			fmt.Printf("Error closing file: %v\n", closeErr)
-		}
-		os.Exit(1)
-	}
-
-	if err := f.Close(); err != nil {
-		fmt.Printf("Error closing file: %v\n", err)
-	}
-
-	// Wait a moment to ensure process started
-	time.Sleep(200 * time.Millisecond)
-
-	// Verify it's running
-	if !isProcessRunning(cmd.Process.Pid) {
-		fmt.Println(red("❌ Failed to start daemon"))
-		if err := os.Remove(pidFile); err != nil && !os.IsNotExist(err) {
-			fmt.Printf("Error removing PID file: %v\n", err)
-		}
-		os.Exit(1)
-	}
-
-	fmt.Println(green("✅ ServerHealth started in background!"))
-	fmt.Printf("PID: %d\n", cmd.Process.Pid)
-	fmt.Printf("Log file: %s\n", logFile)
-	fmt.Println("Use '" + bold(appName+" status") + "' to check status")
-	fmt.Println("Use '" + bold(appName+" stop") + "' to stop")
-	fmt.Println("Use '" + bold(appName+" logs") + "' to view logs")
-}
-
-// Foreground start implementation
-func startForeground(config *Config) {
-	fmt.Println(bold("🚀 Starting ServerHealth"))
-	fmt.Println("═══════════════════════════════════")
-
-	monitor := NewMonitor(config)
-
-	// Setup signal handling
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-
-	// Start monitoring
-	go monitor.Start()
-
-	fmt.Println(green("✅ ServerHealth started successfully!"))
-	fmt.Println("Press Ctrl+C to stop...")
-
-	// Wait for shutdown signal
-	<-sigChan
-	fmt.Println(yellow("\n🛑 Stopping ServerHealth..."))
-	monitor.Stop()
-	fmt.Println(green("✅ ServerHealth stopped successfully!"))
 }
 
 // Helper function to stop daemon process
@@ -620,18 +440,6 @@ func stopDaemonProcess(pidFile string) error {
 	return nil
 }
 
-// Helper function to check if already running
-func isAlreadyRunning() bool {
-	// Check if running as system service
-	if IsServiceRunning(appName) {
-		return true
-	}
-
-	// Check if daemon process is running
-	pidFile := filepath.Join(getPIDDir(), appName+".pid")
-	return checkPIDFile(pidFile)
-}
-
 // Helper function to check PID file with improved validation
 func checkPIDFile(pidFile string) bool {
 	data, err := os.ReadFile(pidFile)
@@ -696,20 +504,7 @@ func getLogDir() string {
 	return filepath.Join(os.Getenv("HOME"), ".local", "log")
 }
 
-// Helper function to ensure directories exist with proper permissions
-func ensureDirectories() error {
-	pidDir := getPIDDir()
-	logDir := getLogDir()
-
-	// Create PID directory
-	if err := os.MkdirAll(pidDir, 0o755); err != nil {
-		return fmt.Errorf("failed to create PID directory: %w", err)
-	}
-
-	// Create log directory
-	if err := os.MkdirAll(logDir, 0o755); err != nil {
-		return fmt.Errorf("failed to create log directory: %w", err)
-	}
-
-	return nil
+// Helper function to get PID file with improved path handling
+func getPIDFile() string {
+	return filepath.Join(getPIDDir(), appName+".pid")
 }

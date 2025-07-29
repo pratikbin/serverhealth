@@ -7,12 +7,11 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 )
 
-// NotificationType represents the type of notification
+// NotificationType represents the type of notification provider
 type NotificationType string
 
 const (
@@ -39,12 +38,12 @@ type NotificationMessage struct {
 	Hostname  string            `json:"hostname"`
 	IP        string            `json:"ip"`
 	Timestamp time.Time         `json:"timestamp"`
-	Metric    string            `json:"metric,omitempty"`
-	Value     interface{}       `json:"value,omitempty"`
-	Threshold interface{}       `json:"threshold,omitempty"`
+	Metric    string            `json:"metric"`
+	Value     string            `json:"value"`
+	Threshold string            `json:"threshold"`
 }
 
-// NotificationProvider defines the interface for notification providers
+// NotificationProvider interface defines methods for notification providers
 type NotificationProvider interface {
 	Send(ctx context.Context, message *NotificationMessage) error
 	Validate() error
@@ -76,7 +75,7 @@ func NewNotificationManager(logger *log.Logger) *NotificationManager {
 	}
 }
 
-// AddProvider adds a notification provider
+// AddProvider adds a notification provider to the manager
 func (nm *NotificationManager) AddProvider(provider NotificationProvider) error {
 	if err := provider.Validate(); err != nil {
 		return fmt.Errorf("invalid provider %s: %w", provider.GetType(), err)
@@ -85,18 +84,14 @@ func (nm *NotificationManager) AddProvider(provider NotificationProvider) error 
 	return nil
 }
 
-// Send sends a notification to all providers
+// Send sends a notification message to all enabled providers concurrently
 func (nm *NotificationManager) Send(ctx context.Context, message *NotificationMessage) {
 	if len(nm.providers) == 0 {
 		nm.logger.Println("No notification providers configured")
 		return
 	}
 
-	// Set timestamp if not set
-	if message.Timestamp.IsZero() {
-		message.Timestamp = time.Now()
-	}
-
+	// Send to all providers concurrently
 	for _, provider := range nm.providers {
 		go func(p NotificationProvider) {
 			if err := p.Send(ctx, message); err != nil {
@@ -108,78 +103,8 @@ func (nm *NotificationManager) Send(ctx context.Context, message *NotificationMe
 	}
 }
 
-// SlackProvider implements Slack notifications
-type SlackProvider struct {
-	WebhookURL string
-	client     *http.Client
-}
-
-// NewSlackProvider creates a new Slack notification provider
-func NewSlackProvider(webhookURL string, client *http.Client) *SlackProvider {
-	return &SlackProvider{
-		WebhookURL: webhookURL,
-		client:     client,
-	}
-}
-
-// GetType returns the provider type
-func (sp *SlackProvider) GetType() NotificationType {
-	return NotificationTypeSlack
-}
-
-// Validate validates the Slack provider configuration
-func (sp *SlackProvider) Validate() error {
-	if sp.WebhookURL == "" {
-		return fmt.Errorf("webhook URL is required")
-	}
-
-	parsedURL, err := url.Parse(sp.WebhookURL)
-	if err != nil {
-		return fmt.Errorf("invalid URL format: %w", err)
-	}
-
-	if parsedURL.Scheme != "https" {
-		return fmt.Errorf("webhook URL must use HTTPS")
-	}
-
-	if !strings.Contains(parsedURL.Host, "hooks.slack.com") {
-		return fmt.Errorf("webhook URL must be from hooks.slack.com")
-	}
-
-	return nil
-}
-
-// Send sends a notification to Slack
-func (sp *SlackProvider) Send(ctx context.Context, message *NotificationMessage) error {
-	// Create Slack message
-	emoji := ":information_source:"
-	switch message.Level {
-	case NotificationLevelWarning:
-		emoji = ":warning:"
-	case NotificationLevelError:
-		emoji = ":x:"
-	}
-
-	slackText := fmt.Sprintf("%s *%s*\n%s\n\n*Server:* %s (%s)\n*Time:* %s",
-		emoji, message.Title, message.Message, message.Hostname, message.IP,
-		message.Timestamp.Format("2006-01-02 15:04:05"))
-
-	if message.Metric != "" && message.Value != nil {
-		slackText += fmt.Sprintf("\n*Metric:* %s = %v", message.Metric, message.Value)
-		if message.Threshold != nil {
-			slackText += fmt.Sprintf(" (threshold: %v)", message.Threshold)
-		}
-	}
-
-	payload := map[string]string{
-		"text": slackText,
-	}
-
-	return sp.sendHTTPRequest(ctx, payload)
-}
-
-// sendHTTPRequest sends an HTTP request with retry logic
-func (sp *SlackProvider) sendHTTPRequest(ctx context.Context, payload interface{}) error {
+// sendHTTPRequest is a shared function for sending HTTP requests with retry logic
+func sendHTTPRequest(ctx context.Context, client *http.Client, url string, payload interface{}) error {
 	jsonData, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("failed to marshal JSON: %w", err)
@@ -189,7 +114,7 @@ func (sp *SlackProvider) sendHTTPRequest(ctx context.Context, payload interface{
 	const retryDelay = 5 * time.Second
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
-		req, err := http.NewRequestWithContext(ctx, "POST", sp.WebhookURL, bytes.NewBuffer(jsonData))
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(jsonData))
 		if err != nil {
 			return fmt.Errorf("failed to create request: %w", err)
 		}
@@ -197,7 +122,7 @@ func (sp *SlackProvider) sendHTTPRequest(ctx context.Context, payload interface{
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("User-Agent", "ServerHealth/1.0")
 
-		resp, err := sp.client.Do(req)
+		resp, err := client.Do(req)
 		if err != nil {
 			if attempt < maxRetries {
 				time.Sleep(retryDelay)
@@ -220,7 +145,68 @@ func (sp *SlackProvider) sendHTTPRequest(ctx context.Context, payload interface{
 	return fmt.Errorf("failed to send notification after %d attempts", maxRetries)
 }
 
-// TelegramProvider implements Telegram notifications
+// SlackProvider implements NotificationProvider for Slack
+type SlackProvider struct {
+	WebhookURL string
+	client     *http.Client
+}
+
+// NewSlackProvider creates a new Slack notification provider
+func NewSlackProvider(webhookURL string, client *http.Client) *SlackProvider {
+	return &SlackProvider{
+		WebhookURL: webhookURL,
+		client:     client,
+	}
+}
+
+// Validate validates the Slack provider configuration
+func (sp *SlackProvider) Validate() error {
+	if sp.WebhookURL == "" {
+		return fmt.Errorf("webhook URL is required")
+	}
+
+	if !strings.HasPrefix(sp.WebhookURL, "https://") {
+		return fmt.Errorf("webhook URL must use HTTPS")
+	}
+
+	if !strings.Contains(sp.WebhookURL, "hooks.slack.com") {
+		return fmt.Errorf("webhook URL must be from hooks.slack.com")
+	}
+
+	return nil
+}
+
+// GetType returns the notification type
+func (sp *SlackProvider) GetType() NotificationType {
+	return NotificationTypeSlack
+}
+
+// Send sends a notification to Slack
+func (sp *SlackProvider) Send(ctx context.Context, message *NotificationMessage) error {
+	// Determine emoji based on level
+	var emoji string
+	switch message.Level {
+	case NotificationLevelInfo:
+		emoji = "ℹ️"
+	case NotificationLevelWarning:
+		emoji = "⚠️"
+	case NotificationLevelError:
+		emoji = "❌"
+	default:
+		emoji = "ℹ️"
+	}
+
+	// Create Slack payload
+	payload := map[string]interface{}{
+		"text": fmt.Sprintf("%s *%s*\n%s\n\n*Server:* %s (%s)\n*Metric:* %s\n*Value:* %s\n*Threshold:* %s\n*Time:* %s",
+			emoji, message.Title, message.Message, message.Hostname, message.IP,
+			message.Metric, message.Value, message.Threshold, message.Timestamp.Format("2006-01-02 15:04:05")),
+	}
+
+	return sendHTTPRequest(ctx, sp.client, sp.WebhookURL, payload)
+}
+
+// TelegramProvider implements NotificationProvider for Telegram
 type TelegramProvider struct {
 	BotToken string
 	ChatID   string
@@ -236,99 +222,54 @@ func NewTelegramProvider(botToken, chatID string, client *http.Client) *Telegram
 	}
 }
 
-// GetType returns the provider type
-func (tp *TelegramProvider) GetType() NotificationType {
-	return NotificationTypeTelegram
-}
-
 // Validate validates the Telegram provider configuration
 func (tp *TelegramProvider) Validate() error {
 	if tp.BotToken == "" {
 		return fmt.Errorf("bot token is required")
 	}
+
 	if tp.ChatID == "" {
 		return fmt.Errorf("chat ID is required")
 	}
+
 	return nil
+}
+
+// GetType returns the notification type
+func (tp *TelegramProvider) GetType() NotificationType {
+	return NotificationTypeTelegram
 }
 
 // Send sends a notification to Telegram
 func (tp *TelegramProvider) Send(ctx context.Context, message *NotificationMessage) error {
-	// Create Telegram message
-	emoji := "ℹ️"
+	// Determine emoji based on level
+	var emoji string
 	switch message.Level {
+	case NotificationLevelInfo:
+		emoji = "ℹ️"
 	case NotificationLevelWarning:
 		emoji = "⚠️"
 	case NotificationLevelError:
 		emoji = "❌"
+	default:
+		emoji = "ℹ️"
 	}
 
-	telegramText := fmt.Sprintf("%s *%s*\n\n%s\n\n*Server:* %s (%s)\n*Time:* %s",
-		emoji, message.Title, message.Message, message.Hostname, message.IP,
-		message.Timestamp.Format("2006-01-02 15:04:05"))
-
-	if message.Metric != "" && message.Value != nil {
-		telegramText += fmt.Sprintf("\n*Metric:* %s = %v", message.Metric, message.Value)
-		if message.Threshold != nil {
-			telegramText += fmt.Sprintf(" (threshold: %v)", message.Threshold)
-		}
-	}
-
-	// Telegram API endpoint
-	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", tp.BotToken)
-
+	// Create Telegram payload
 	payload := map[string]interface{}{
-		"chat_id":    tp.ChatID,
-		"text":       telegramText,
+		"chat_id": tp.ChatID,
+		"text": fmt.Sprintf("%s *%s*\n%s\n\n*Server:* %s (%s)\n*Metric:* %s\n*Value:* %s\n*Threshold:* %s\n*Time:* %s",
+			emoji, message.Title, message.Message, message.Hostname, message.IP,
+			message.Metric, message.Value, message.Threshold, message.Timestamp.Format("2006-01-02 15:04:05")),
 		"parse_mode": "Markdown",
 	}
 
-	return tp.sendHTTPRequest(ctx, apiURL, payload)
+	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", tp.BotToken)
+
+	return sendHTTPRequest(ctx, tp.client, apiURL, payload)
 }
 
-// sendHTTPRequest sends an HTTP request with retry logic
-func (tp *TelegramProvider) sendHTTPRequest(ctx context.Context, apiURL string, payload interface{}) error {
-	jsonData, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("failed to marshal JSON: %w", err)
-	}
-
-	const maxRetries = 3
-	const retryDelay = 5 * time.Second
-
-	for attempt := 1; attempt <= maxRetries; attempt++ {
-		req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewBuffer(jsonData))
-		if err != nil {
-			return fmt.Errorf("failed to create request: %w", err)
-		}
-
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("User-Agent", "ServerHealth/1.0")
-
-		resp, err := tp.client.Do(req)
-		if err != nil {
-			if attempt < maxRetries {
-				time.Sleep(retryDelay)
-				continue
-			}
-			return fmt.Errorf("failed to send request: %w", err)
-		}
-
-		defer resp.Body.Close()
-
-		if resp.StatusCode == http.StatusOK {
-			return nil
-		}
-
-		if attempt < maxRetries {
-			time.Sleep(retryDelay)
-		}
-	}
-
-	return fmt.Errorf("failed to send notification after %d attempts", maxRetries)
-}
-
-// DiscordProvider implements Discord notifications
+// DiscordProvider implements NotificationProvider for Discord
 type DiscordProvider struct {
 	WebhookURL string
 	client     *http.Client
@@ -342,123 +283,76 @@ func NewDiscordProvider(webhookURL string, client *http.Client) *DiscordProvider
 	}
 }
 
-// GetType returns the provider type
-func (dp *DiscordProvider) GetType() NotificationType {
-	return NotificationTypeDiscord
-}
-
 // Validate validates the Discord provider configuration
 func (dp *DiscordProvider) Validate() error {
 	if dp.WebhookURL == "" {
 		return fmt.Errorf("webhook URL is required")
 	}
 
-	parsedURL, err := url.Parse(dp.WebhookURL)
-	if err != nil {
-		return fmt.Errorf("invalid URL format: %w", err)
-	}
-
-	if parsedURL.Scheme != "https" {
+	if !strings.HasPrefix(dp.WebhookURL, "https://") {
 		return fmt.Errorf("webhook URL must use HTTPS")
 	}
 
-	if !strings.Contains(parsedURL.Host, "discord.com") && !strings.Contains(parsedURL.Host, "discordapp.com") {
+	if !strings.Contains(dp.WebhookURL, "discord.com") && !strings.Contains(dp.WebhookURL, "discordapp.com") {
 		return fmt.Errorf("webhook URL must be from discord.com or discordapp.com")
 	}
 
 	return nil
 }
 
+// GetType returns the notification type
+func (dp *DiscordProvider) GetType() NotificationType {
+	return NotificationTypeDiscord
+}
+
 // Send sends a notification to Discord
 func (dp *DiscordProvider) Send(ctx context.Context, message *NotificationMessage) error {
-	// Create Discord embed
-	color := 0x00ff00 // Green for info
+	// Determine color based on level
+	var color int
 	switch message.Level {
+	case NotificationLevelInfo:
+		color = 0x3498db // Blue
 	case NotificationLevelWarning:
-		color = 0xffff00 // Yellow for warning
+		color = 0xf39c12 // Orange
 	case NotificationLevelError:
-		color = 0xff0000 // Red for error
+		color = 0xe74c3c // Red
+	default:
+		color = 0x3498db // Blue
 	}
 
-	// Create embed fields
-	fields := []map[string]interface{}{
-		{
-			"name":   "Server",
-			"value":  fmt.Sprintf("%s (%s)", message.Hostname, message.IP),
-			"inline": true,
-		},
-		{
-			"name":   "Time",
-			"value":  message.Timestamp.Format("2006-01-02 15:04:05"),
-			"inline": true,
-		},
-	}
-
-	if message.Metric != "" && message.Value != nil {
-		fieldValue := fmt.Sprintf("%v", message.Value)
-		if message.Threshold != nil {
-			fieldValue += fmt.Sprintf(" (threshold: %v)", message.Threshold)
-		}
-		fields = append(fields, map[string]interface{}{
-			"name":   "Metric",
-			"value":  fieldValue,
-			"inline": true,
-		})
-	}
-
+	// Create Discord embed
 	embed := map[string]interface{}{
 		"title":       message.Title,
 		"description": message.Message,
 		"color":       color,
-		"fields":      fields,
-		"timestamp":   message.Timestamp.Format(time.RFC3339),
+		"fields": []map[string]interface{}{
+			{
+				"name":   "Server",
+				"value":  fmt.Sprintf("%s (%s)", message.Hostname, message.IP),
+				"inline": true,
+			},
+			{
+				"name":   "Metric",
+				"value":  message.Metric,
+				"inline": true,
+			},
+			{
+				"name":   "Value",
+				"value":  message.Value,
+				"inline": true,
+			},
+			{
+				"name":   "Threshold",
+				"value":  message.Threshold,
+				"inline": true,
+			},
+		},
+		"timestamp": message.Timestamp.Format(time.RFC3339),
 	}
 
 	payload := map[string]interface{}{
 		"embeds": []map[string]interface{}{embed},
 	}
 
-	return dp.sendHTTPRequest(ctx, payload)
-}
-
-// sendHTTPRequest sends an HTTP request with retry logic
-func (dp *DiscordProvider) sendHTTPRequest(ctx context.Context, payload interface{}) error {
-	jsonData, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("failed to marshal JSON: %w", err)
-	}
-
-	const maxRetries = 3
-	const retryDelay = 5 * time.Second
-
-	for attempt := 1; attempt <= maxRetries; attempt++ {
-		req, err := http.NewRequestWithContext(ctx, "POST", dp.WebhookURL, bytes.NewBuffer(jsonData))
-		if err != nil {
-			return fmt.Errorf("failed to create request: %w", err)
-		}
-
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("User-Agent", "ServerHealth/1.0")
-
-		resp, err := dp.client.Do(req)
-		if err != nil {
-			if attempt < maxRetries {
-				time.Sleep(retryDelay)
-				continue
-			}
-			return fmt.Errorf("failed to send request: %w", err)
-		}
-
-		defer resp.Body.Close()
-
-		if resp.StatusCode == http.StatusOK {
-			return nil
-		}
-
-		if attempt < maxRetries {
-			time.Sleep(retryDelay)
-		}
-	}
-
-	return fmt.Errorf("failed to send notification after %d attempts", maxRetries)
+	return sendHTTPRequest(ctx, dp.client, dp.WebhookURL, payload)
 }
