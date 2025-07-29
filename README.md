@@ -80,9 +80,8 @@ graph TB
 - ⚙️ **Enhanced YAML Configuration** - Structured configuration with validation
 - 📝 **Multiple Run Modes** - Foreground, background, or system service
 - 🛡️ **Rate Limiting** - Per-metric daily alert limits
-- 📋 **Easy Log Viewing** - Built-in log management and **viewing**
+- 📋 **Easy Log Viewing** - Built-in log management and viewing
 - 🔄 **Legacy Migration** - Automatic migration from old configuration format
-- 🌍 **Environment Variables** - Full support for containerized deployments
 
 ## 🚀 Quick Start
 
@@ -197,28 +196,6 @@ notifications:
 # General Settings
 log_level: info
 service_name: serverhealth
-```
-
-### Environment Variables
-
-Full support for environment variables for containerized deployments:
-
-```bash
-# Monitoring settings
-export SERVERHEALTH_DISK_THRESHOLD=90
-export SERVERHEALTH_CPU_THRESHOLD=95
-export SERVERHEALTH_MEMORY_THRESHOLD=90
-export SERVERHEALTH_LOG_LEVEL=debug
-
-# Notification providers
-export SERVERHEALTH_NOTIFICATIONS_0_TYPE=slack
-export SERVERHEALTH_NOTIFICATIONS_0_ENABLED=true
-export SERVERHEALTH_NOTIFICATIONS_0_WEBHOOK_URL="https://hooks.slack.com/services/YOUR/WEBHOOK"
-
-export SERVERHEALTH_NOTIFICATIONS_1_TYPE=telegram
-export SERVERHEALTH_NOTIFICATIONS_1_ENABLED=true
-export SERVERHEALTH_NOTIFICATIONS_1_BOT_TOKEN="YOUR_BOT_TOKEN"
-export SERVERHEALTH_NOTIFICATIONS_1_CHAT_ID="YOUR_CHAT_ID"
 ```
 
 ### Run Modes
@@ -528,8 +505,19 @@ serverhealth status
 
 # Verify webhook URLs and credentials
 # Test with debug logging
-export SERVERHEALTH_LOG_LEVEL=debug
 ./serverhealth start
+```
+
+### Debug Mode
+
+Enable debug logging to see detailed information:
+
+```bash
+# Edit config.yaml to enable debug logging
+log_level: debug
+
+# Or run with debug output
+./serverhealth start --debug
 ```
 
 ## 📝 License
@@ -546,7 +534,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 - [x] Modular notification system (Slack, Telegram, Discord)
 - [x] Enhanced YAML configuration
-- [x] Environment variable support
 - [x] Linux optimizations with native system calls
 - [ ] More notification channels (Email, PagerDuty, OpsGenie)
 - [ ] Network monitoring

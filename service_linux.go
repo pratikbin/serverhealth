@@ -78,7 +78,7 @@ func installService(config *Config) error {
 	// Create systemd service file content with improved configuration
 	serviceContent := fmt.Sprintf(`[Unit]
 Description=Server Health Monitor
-Documentation=https://github.com/kailashvele/serverhealth
+Documentation=https://github.com/pratikbin/serverhealth
 After=network-online.target
 Wants=network-online.target
 
@@ -86,7 +86,7 @@ Wants=network-online.target
 Type=simple
 User=serverhealth
 Group=serverhealth
-ExecStart=%s daemon
+ExecStart=%s start
 Restart=always
 RestartSec=30
 StandardOutput=journal
