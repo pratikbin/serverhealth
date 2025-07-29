@@ -72,9 +72,9 @@ func (w *ConfigurationWizard) configureMonitoringOptions(config *Config) error {
 
 	selectedMetrics := make(map[string]bool)
 	// Set current selections
-	selectedMetrics["disk"] = config.DiskEnabled
-	selectedMetrics["cpu"] = config.CPUEnabled
-	selectedMetrics["memory"] = config.MemoryEnabled
+	selectedMetrics["disk"] = config.Disk.Enabled
+	selectedMetrics["cpu"] = config.CPU.Enabled
+	selectedMetrics["memory"] = config.Memory.Enabled
 
 	// Multi-select loop with proper cursor handling
 	for {
@@ -149,9 +149,9 @@ func (w *ConfigurationWizard) configureMonitoringOptions(config *Config) error {
 	}
 
 	// Apply selections to config
-	config.DiskEnabled = selectedMetrics["disk"]
-	config.CPUEnabled = selectedMetrics["cpu"]
-	config.MemoryEnabled = selectedMetrics["memory"]
+	config.Disk.Enabled = selectedMetrics["disk"]
+	config.CPU.Enabled = selectedMetrics["cpu"]
+	config.Memory.Enabled = selectedMetrics["memory"]
 
 	fmt.Println()
 	fmt.Println(green("✅ Monitoring options configured!"))
@@ -160,97 +160,52 @@ func (w *ConfigurationWizard) configureMonitoringOptions(config *Config) error {
 
 func (w *ConfigurationWizard) configureSlackWebhooks(config *Config) error {
 	fmt.Println()
-	fmt.Println(bold("🔗 Slack Webhook Configuration"))
-	fmt.Println("Enter your Slack webhook URLs for notifications:")
+	fmt.Println(bold("🔗 Notification Providers"))
+	fmt.Println("Configure notification providers for alerts:")
 	fmt.Println()
 
-	// Collect enabled metrics that need webhooks
-	var webhookNeeds []struct {
-		Name     string
-		Current  string
-		Required []string
-		Target   *string
-	}
-
-	if config.DiskEnabled {
-		webhookNeeds = append(webhookNeeds, struct {
-			Name     string
-			Current  string
-			Required []string
-			Target   *string
-		}{
-			Name:     "Disk Usage Notifications",
-			Current:  config.SlackDiskWebhookURL,
-			Required: []string{"disk"},
-			Target:   &config.SlackDiskWebhookURL,
-		})
-	}
-
-	if config.CPUEnabled || config.MemoryEnabled {
-		var required []string
-		if config.CPUEnabled {
-			required = append(required, "CPU")
-		}
-		if config.MemoryEnabled {
-			required = append(required, "memory")
-		}
-
-		webhookNeeds = append(webhookNeeds, struct {
-			Name     string
-			Current  string
-			Required []string
-			Target   *string
-		}{
-			Name:     fmt.Sprintf("CPU/Memory Notifications (%s)", strings.Join(required, ", ")),
-			Current:  config.SlackCPUMemoryWebhookURL,
-			Required: required,
-			Target:   &config.SlackCPUMemoryWebhookURL,
-		})
-	}
-
-	if len(webhookNeeds) == 0 {
-		return fmt.Errorf("no monitoring enabled - cannot configure webhooks")
+	// Define available notification providers
+	providers := []struct {
+		Name        string
+		Description string
+		Type        string
+	}{
+		{"Slack", "Send notifications to Slack channels", "slack"},
+		{"Telegram", "Send notifications to Telegram chat", "telegram"},
+		{"Discord", "Send notifications to Discord channels", "discord"},
 	}
 
 	fmt.Println(blue("📝 Instructions:"))
 	fmt.Println("  • Use ↑/↓ arrows to navigate")
-	fmt.Println("  • Press Enter to configure selected webhook")
-	fmt.Println("  • Enter valid Slack webhook URLs")
-	fmt.Println("  • URLs must start with 'https://hooks.slack.com/'")
+	fmt.Println("  • Press Enter to configure selected provider")
+	fmt.Println("  • You can configure multiple providers")
+	fmt.Println("  • At least one provider is recommended")
 	fmt.Println()
 
 	for {
-		// Show current webhook status
-		fmt.Println(bold("Webhook Configuration Status:"))
-		allConfigured := true
+		// Show current notification status
+		fmt.Println(bold("Notification Providers:"))
 		var items []string
 
-		for i, webhook := range webhookNeeds {
-			status := red("❌ Not configured")
-			if webhook.Current != "" {
-				status = green("✅ Configured")
-			} else {
-				allConfigured = false
-			}
-
-			display := fmt.Sprintf("%s - %s", webhook.Name, status)
-			if webhook.Current != "" {
-				// Show partial URL for confirmation
-				partial := webhook.Current
-				if len(partial) > 50 {
-					partial = partial[:30] + "..." + partial[len(partial)-15:]
+		for _, provider := range providers {
+			enabled := false
+			for _, notification := range config.Notifications {
+				if notification.Type == provider.Type && notification.Enabled {
+					enabled = true
+					break
 				}
-				display += fmt.Sprintf(" (%s)", faint(partial))
 			}
+
+			status := red("❌ Not configured")
+			if enabled {
+				status = green("✅ Configured")
+			}
+
+			display := fmt.Sprintf("%s - %s", provider.Name, status)
 			items = append(items, display)
-			_ = i
 		}
 
-		if allConfigured {
-			items = append(items, green("── All webhooks configured - Continue ──"))
-		} else {
-			items = append(items, yellow("── Skip remaining (not recommended) ──"))
-		}
+		items = append(items, green("── Continue with current configuration ──"))
 
 		templates := &promptui.SelectTemplates{
 			Label:    "{{ . }}",
@@ -260,7 +215,7 @@ func (w *ConfigurationWizard) configureSlackWebhooks(config *Config) error {
 		}
 
 		prompt := promptui.Select{
-			Label:     "Select webhook to configure",
+			Label:     "Select notification provider to configure",
 			Items:     items,
 			Templates: templates,
 			Size:      len(items),
@@ -272,64 +227,187 @@ func (w *ConfigurationWizard) configureSlackWebhooks(config *Config) error {
 			return err
 		}
 
-		// If user selected continue/skip
-		if index >= len(webhookNeeds) {
-			if allConfigured {
-				break
-			} else {
-				// Confirm skipping
-				confirmPrompt := promptui.Select{
-					Label: "Some webhooks are not configured. Continue anyway?",
-					Items: []string{"No, let me configure them", "Yes, skip for now"},
-					Templates: &promptui.SelectTemplates{
-						Label:    "{{ . }}",
-						Active:   "👉 {{ . | cyan | bold }}",
-						Inactive: "   {{ . | white }}",
-						Selected: "{{ . | green }}",
-					},
-					HideHelp: true,
-				}
-				_, result, err := confirmPrompt.Run()
-				if err != nil {
-					return err
-				}
-				if result == "Yes, skip for now" {
-					break
-				}
-				continue
-			}
+		// If user selected continue
+		if index >= len(providers) {
+			break
 		}
 
-		// Configure selected webhook
-		webhook := &webhookNeeds[index]
-
-		prompt2 := promptui.Prompt{
-			Label:   fmt.Sprintf("Enter Slack webhook URL for %s", webhook.Name),
-			Default: webhook.Current,
-			Validate: func(input string) error {
-				if input == "" {
-					return fmt.Errorf("webhook URL cannot be empty")
-				}
-				if !strings.HasPrefix(input, "https://hooks.slack.com/") {
-					return fmt.Errorf("invalid Slack webhook URL format")
-				}
-				return nil
-			},
-		}
-
-		result, err := prompt2.Run()
-		if err != nil {
+		// Configure selected provider
+		provider := &providers[index]
+		if err := w.configureNotificationProvider(config, provider.Type); err != nil {
 			return err
 		}
-
-		*webhook.Target = result
-		webhook.Current = result
-
-		fmt.Println(green("✅ Webhook configured successfully!"))
-		fmt.Println()
 	}
 
-	fmt.Println(green("🎉 Slack webhook configuration complete!"))
+	// Check if at least one notification is configured
+	enabledCount := 0
+	for _, notification := range config.Notifications {
+		if notification.Enabled {
+			enabledCount++
+		}
+	}
+
+	if enabledCount == 0 {
+		fmt.Println(yellow("⚠️  No notification providers configured"))
+		fmt.Println("You can add notifications later by running 'serverhealth configure' again")
+	}
+
+	fmt.Println(green("🎉 Notification configuration complete!"))
+	return nil
+}
+
+func (w *ConfigurationWizard) configureNotificationProvider(config *Config, providerType string) error {
+	fmt.Printf("\n%s Configuration\n", strings.Title(providerType))
+	fmt.Println("═══════════════════════════════════")
+
+	// Find existing notification or create new one
+	var notification *NotificationConfig
+	for i := range config.Notifications {
+		if config.Notifications[i].Type == providerType {
+			notification = &config.Notifications[i]
+			break
+		}
+	}
+
+	if notification == nil {
+		// Create new notification
+		config.Notifications = append(config.Notifications, NotificationConfig{
+			Type:    providerType,
+			Enabled: true,
+		})
+		notification = &config.Notifications[len(config.Notifications)-1]
+	}
+
+	// Configure based on provider type
+	switch providerType {
+	case "slack":
+		return w.configureSlackProvider(notification)
+	case "telegram":
+		return w.configureTelegramProvider(notification)
+	case "discord":
+		return w.configureDiscordProvider(notification)
+	default:
+		return fmt.Errorf("unsupported provider type: %s", providerType)
+	}
+}
+
+func (w *ConfigurationWizard) configureSlackProvider(notification *NotificationConfig) error {
+	fmt.Println("Slack uses webhook URLs to send notifications.")
+	fmt.Println("To create a webhook:")
+	fmt.Println("1. Go to your Slack workspace")
+	fmt.Println("2. Create a new app or use an existing one")
+	fmt.Println("3. Enable Incoming Webhooks")
+	fmt.Println("4. Create a webhook URL")
+	fmt.Println()
+
+	prompt := promptui.Prompt{
+		Label:   "Enter Slack webhook URL",
+		Default: notification.WebhookURL,
+		Validate: func(input string) error {
+			if input == "" {
+				return fmt.Errorf("webhook URL cannot be empty")
+			}
+			if !strings.HasPrefix(input, "https://hooks.slack.com/") {
+				return fmt.Errorf("invalid Slack webhook URL format")
+			}
+			return nil
+		},
+	}
+
+	result, err := prompt.Run()
+	if err != nil {
+		return err
+	}
+
+	notification.WebhookURL = result
+	notification.Enabled = true
+
+	fmt.Println(green("✅ Slack notification configured successfully!"))
+	return nil
+}
+
+func (w *ConfigurationWizard) configureTelegramProvider(notification *NotificationConfig) error {
+	fmt.Println("Telegram uses bot tokens and chat IDs to send notifications.")
+	fmt.Println("To set up:")
+	fmt.Println("1. Create a bot with @BotFather")
+	fmt.Println("2. Get your bot token")
+	fmt.Println("3. Get your chat ID (send a message to your bot and check @userinfobot)")
+	fmt.Println()
+
+	// Bot Token
+	prompt := promptui.Prompt{
+		Label:   "Enter Telegram bot token",
+		Default: notification.BotToken,
+		Validate: func(input string) error {
+			if input == "" {
+				return fmt.Errorf("bot token cannot be empty")
+			}
+			return nil
+		},
+	}
+
+	result, err := prompt.Run()
+	if err != nil {
+		return err
+	}
+	notification.BotToken = result
+
+	// Chat ID
+	prompt2 := promptui.Prompt{
+		Label:   "Enter Telegram chat ID",
+		Default: notification.ChatID,
+		Validate: func(input string) error {
+			if input == "" {
+				return fmt.Errorf("chat ID cannot be empty")
+			}
+			return nil
+		},
+	}
+
+	result2, err := prompt2.Run()
+	if err != nil {
+		return err
+	}
+	notification.ChatID = result2
+	notification.Enabled = true
+
+	fmt.Println(green("✅ Telegram notification configured successfully!"))
+	return nil
+}
+
+func (w *ConfigurationWizard) configureDiscordProvider(notification *NotificationConfig) error {
+	fmt.Println("Discord uses webhook URLs to send notifications.")
+	fmt.Println("To create a webhook:")
+	fmt.Println("1. Go to your Discord server")
+	fmt.Println("2. Edit a channel")
+	fmt.Println("3. Go to Integrations > Webhooks")
+	fmt.Println("4. Create a new webhook")
+	fmt.Println("5. Copy the webhook URL")
+	fmt.Println()
+
+	prompt := promptui.Prompt{
+		Label:   "Enter Discord webhook URL",
+		Default: notification.WebhookURL,
+		Validate: func(input string) error {
+			if input == "" {
+				return fmt.Errorf("webhook URL cannot be empty")
+			}
+			if !strings.Contains(input, "discord.com") && !strings.Contains(input, "discordapp.com") {
+				return fmt.Errorf("invalid Discord webhook URL format")
+			}
+			return nil
+		},
+	}
+
+	result, err := prompt.Run()
+	if err != nil {
+		return err
+	}
+
+	notification.WebhookURL = result
+	notification.Enabled = true
+
+	fmt.Println(green("✅ Discord notification configured successfully!"))
 	return nil
 }
 
@@ -349,9 +427,9 @@ func (w *ConfigurationWizard) configureThresholds(config *Config) error {
 		Description string
 	}
 
-	if config.DiskEnabled {
-		if config.DiskThreshold == 0 {
-			config.DiskThreshold = 80
+	if config.Disk.Enabled {
+		if config.Disk.Threshold == 0 {
+			config.Disk.Threshold = 80
 		}
 		thresholdNeeds = append(thresholdNeeds, struct {
 			Name        string
@@ -362,17 +440,17 @@ func (w *ConfigurationWizard) configureThresholds(config *Config) error {
 			Description string
 		}{
 			Name:        "Disk Usage",
-			Current:     config.DiskThreshold,
+			Current:     config.Disk.Threshold,
 			Default:     80,
-			Target:      &config.DiskThreshold,
+			Target:      &config.Disk.Threshold,
 			Unit:        "%",
 			Description: "Alert when disk usage exceeds this percentage",
 		})
 	}
 
-	if config.CPUEnabled {
-		if config.CPUThreshold == 0 {
-			config.CPUThreshold = 85
+	if config.CPU.Enabled {
+		if config.CPU.Threshold == 0 {
+			config.CPU.Threshold = 85
 		}
 		thresholdNeeds = append(thresholdNeeds, struct {
 			Name        string
@@ -383,17 +461,17 @@ func (w *ConfigurationWizard) configureThresholds(config *Config) error {
 			Description string
 		}{
 			Name:        "CPU Usage",
-			Current:     config.CPUThreshold,
+			Current:     config.CPU.Threshold,
 			Default:     85,
-			Target:      &config.CPUThreshold,
+			Target:      &config.CPU.Threshold,
 			Unit:        "%",
 			Description: "Alert when CPU usage exceeds this percentage",
 		})
 	}
 
-	if config.MemoryEnabled {
-		if config.MemoryThreshold == 0 {
-			config.MemoryThreshold = 85
+	if config.Memory.Enabled {
+		if config.Memory.Threshold == 0 {
+			config.Memory.Threshold = 85
 		}
 		thresholdNeeds = append(thresholdNeeds, struct {
 			Name        string
@@ -404,9 +482,9 @@ func (w *ConfigurationWizard) configureThresholds(config *Config) error {
 			Description string
 		}{
 			Name:        "Memory Usage",
-			Current:     config.MemoryThreshold,
+			Current:     config.Memory.Threshold,
 			Default:     85,
-			Target:      &config.MemoryThreshold,
+			Target:      &config.Memory.Threshold,
 			Unit:        "%",
 			Description: "Alert when memory usage exceeds this percentage",
 		})
@@ -531,10 +609,10 @@ func (w *ConfigurationWizard) configureIntervals(config *Config) error {
 		Max         int
 	}
 
-	// Always add CPU/Memory interval if either is enabled
-	if config.CPUEnabled || config.MemoryEnabled {
-		if config.CheckInterval == 0 {
-			config.CheckInterval = 60
+	// Add CPU interval if enabled
+	if config.CPU.Enabled {
+		if config.CPU.CheckInterval == 0 {
+			config.CPU.CheckInterval = 60
 		}
 		intervalNeeds = append(intervalNeeds, struct {
 			Name        string
@@ -546,20 +624,47 @@ func (w *ConfigurationWizard) configureIntervals(config *Config) error {
 			Min         int
 			Max         int
 		}{
-			Name:        "CPU/Memory Check Interval",
-			Current:     config.CheckInterval,
+			Name:        "CPU Check Interval",
+			Current:     config.CPU.CheckInterval,
 			Default:     60,
-			Target:      &config.CheckInterval,
+			Target:      &config.CPU.CheckInterval,
 			Unit:        "minutes",
-			Description: "How often to check CPU and memory usage",
+			Description: "How often to check CPU usage",
 			Min:         1,
 			Max:         1440, // 24 hours
 		})
 	}
 
-	if config.DiskEnabled {
-		if config.DiskCheckInterval == 0 {
-			config.DiskCheckInterval = 12
+	// Add Memory interval if enabled
+	if config.Memory.Enabled {
+		if config.Memory.CheckInterval == 0 {
+			config.Memory.CheckInterval = 60
+		}
+		intervalNeeds = append(intervalNeeds, struct {
+			Name        string
+			Current     int
+			Default     int
+			Target      *int
+			Unit        string
+			Description string
+			Min         int
+			Max         int
+		}{
+			Name:        "Memory Check Interval",
+			Current:     config.Memory.CheckInterval,
+			Default:     60,
+			Target:      &config.Memory.CheckInterval,
+			Unit:        "minutes",
+			Description: "How often to check memory usage",
+			Min:         1,
+			Max:         1440, // 24 hours
+		})
+	}
+
+	// Add Disk interval if enabled
+	if config.Disk.Enabled {
+		if config.Disk.CheckInterval == 0 {
+			config.Disk.CheckInterval = 12
 		}
 		intervalNeeds = append(intervalNeeds, struct {
 			Name        string
@@ -572,9 +677,9 @@ func (w *ConfigurationWizard) configureIntervals(config *Config) error {
 			Max         int
 		}{
 			Name:        "Disk Check Interval",
-			Current:     config.DiskCheckInterval,
+			Current:     config.Disk.CheckInterval,
 			Default:     12,
-			Target:      &config.DiskCheckInterval,
+			Target:      &config.Disk.CheckInterval,
 			Unit:        "hours",
 			Description: "How often to check disk usage",
 			Min:         1,

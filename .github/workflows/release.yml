@@ -2,72 +2,56 @@ name: Build and Release
 
 on:
   push:
-    branches: [ main, develop ]
-    tags: [ 'v*' ]
+    branches: [main, develop]
+    tags: ["v*"]
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 env:
-  GO_VERSION: '1.21'
-  APP_NAME: 'serverhealth'
+  GO_VERSION: "1.21"
+  APP_NAME: "serverhealth"
 
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: ${{ env.GO_VERSION }}
+      - name: Set up Go
+        uses: actions/setup-go@v4
 
-    - name: Cache Go modules
-      uses: actions/cache@v3
-      with:
-        path: ~/go/pkg/mod
-        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-        restore-keys: |
-          ${{ runner.os }}-go-
+      - name: Run linting
+        run: |
+          # Install golangci-lint if available, otherwise use basic checks
+          if command -v golangci-lint >/dev/null 2>&1; then
+            golangci-lint run
+          else
+            echo "Running basic Go checks..."
+            go vet ./...
 
-    - name: Get dependencies
-      run: go mod download
-
-    - name: Run go mod tidy
-      run: go mod tidy
-
-    - name: Run linting
-      run: |
-        # Install golangci-lint if available, otherwise use basic checks
-        if command -v golangci-lint >/dev/null 2>&1; then
-          golangci-lint run
-        else
-          echo "Running basic Go checks..."
-          go vet ./...
-
-          # Check formatting
-          if [ "$(gofmt -s -l . | wc -l)" -gt 0 ]; then
-            echo "::error::Code is not formatted properly"
-            echo "Files that need formatting:"
-            gofmt -s -l .
-            exit 1
+            # Check formatting
+            if [ "$(gofmt -s -l . | wc -l)" -gt 0 ]; then
+              echo "::error::Code is not formatted properly"
+              echo "Files that need formatting:"
+              gofmt -s -l .
+              exit 1
+            fi
           fi
-        fi
 
-    - name: Build application
-      run: |
-        echo "Building application..."
-        go build -v -o serverhealth .
+      - name: Build application
+        run: |
+          echo "Building application..."
+          go build -v -o serverhealth .
 
-    - name: Run tests (if any exist)
-      run: |
-        # Only run tests if test files exist
-        if find . -name "*_test.go" | grep -q .; then
-          echo "Running tests..."
-          go test -v ./...
-        else
-          echo "No test files found, skipping tests"
-        fi
+      - name: Run tests (if any exist)
+        run: |
+          # Only run tests if test files exist
+          if find . -name "*_test.go" | grep -q .; then
+            echo "Running tests..."
+            go test -v ./...
+          else
+            echo "No test files found, skipping tests"
+          fi
 
   build:
     needs: test
@@ -99,75 +83,75 @@ jobs:
             goarch: arm64
 
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: ${{ env.GO_VERSION }}
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: ${{ env.GO_VERSION }}
 
-    - name: Cache Go modules
-      uses: actions/cache@v3
-      with:
-        path: ~/go/pkg/mod
-        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-        restore-keys: |
-          ${{ runner.os }}-go-
+      - name: Cache Go modules
+        uses: actions/cache@v3
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
 
-    - name: Get dependencies
-      run: go mod download
+      - name: Get dependencies
+        run: go mod download
 
-    - name: Set version
-      id: version
-      run: |
-        if [[ $GITHUB_REF == refs/tags/* ]]; then
-          VERSION=${GITHUB_REF#refs/tags/v}
-        else
-          VERSION="dev-${GITHUB_SHA::8}"
-        fi
-        echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
-        echo "Version: $VERSION"
+      - name: Set version
+        id: version
+        run: |
+          if [[ $GITHUB_REF == refs/tags/* ]]; then
+            VERSION=${GITHUB_REF#refs/tags/v}
+          else
+            VERSION="dev-${GITHUB_SHA::8}"
+          fi
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
 
-    - name: Build binary
-      env:
-        GOOS: ${{ matrix.goos }}
-        GOARCH: ${{ matrix.goarch }}
-        VERSION: ${{ steps.version.outputs.VERSION }}
-      run: |
-        # Create dist directory
-        mkdir -p dist
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: |
+          # Create dist directory
+          mkdir -p dist
 
-        # Set binary name
-        BINARY_NAME="${{ env.APP_NAME }}"
-        if [ "${{ matrix.goos }}" = "windows" ]; then
-          BINARY_NAME="${BINARY_NAME}.exe"
-        fi
+          # Set binary name
+          BINARY_NAME="${{ env.APP_NAME }}"
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            BINARY_NAME="${BINARY_NAME}.exe"
+          fi
 
-        # Build with version info
-        go build -ldflags "-X main.version=$VERSION -X main.buildTime=$(date -u '+%Y-%m-%d_%H:%M:%S')" \
-          -o "dist/${BINARY_NAME}" .
+          # Build with version info
+          go build -ldflags "-X main.version=$VERSION -X main.buildTime=$(date -u '+%Y-%m-%d_%H:%M:%S')" \
+            -o "dist/${BINARY_NAME}" .
 
-        # Create archive
-        ARCHIVE_NAME="${{ env.APP_NAME }}-$VERSION-${{ matrix.os }}-${{ matrix.arch }}"
+          # Create archive
+          ARCHIVE_NAME="${{ env.APP_NAME }}-$VERSION-${{ matrix.os }}-${{ matrix.arch }}"
 
-        if [ "${{ matrix.goos }}" = "windows" ]; then
-          # Create zip for Windows
-          cd dist
-          zip "${ARCHIVE_NAME}.zip" "${BINARY_NAME}"
-          cd ..
-        else
-          # Create tar.gz for Unix-like systems
-          cd dist
-          tar -czf "${ARCHIVE_NAME}.tar.gz" "${BINARY_NAME}"
-          cd ..
-        fi
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            # Create zip for Windows
+            cd dist
+            zip "${ARCHIVE_NAME}.zip" "${BINARY_NAME}"
+            cd ..
+          else
+            # Create tar.gz for Unix-like systems
+            cd dist
+            tar -czf "${ARCHIVE_NAME}.tar.gz" "${BINARY_NAME}"
+            cd ..
+          fi
 
-    - name: Upload build artifacts
-      uses: actions/upload-artifact@v3
-      with:
-        name: dist-${{ matrix.os }}-${{ matrix.arch }}-${{ steps.version.outputs.VERSION }}
-        path: dist/*.tar.gz dist/*.zip
-        retention-days: 30
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: dist-${{ matrix.os }}-${{ matrix.arch }}-${{ steps.version.outputs.VERSION }}
+          path: dist/*.tar.gz dist/*.zip
+          retention-days: 30
 
   release:
     needs: [test, build]
@@ -175,110 +159,110 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
 
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Set version
-      id: version
-      run: |
-        VERSION=${GITHUB_REF#refs/tags/v}
-        echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
-        echo "Version: $VERSION"
+      - name: Set version
+        id: version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
 
-    - name: Download all artifacts
-      uses: actions/download-artifact@v3
-      with:
-        path: artifacts
+      - name: Download all artifacts
+        uses: actions/download-artifact@v3
+        with:
+          path: artifacts
 
-    - name: Prepare release assets
-      run: |
-        mkdir -p dist
-        find artifacts -name "*.tar.gz" -o -name "*.zip" | xargs -I {} cp {} dist/
+      - name: Prepare release assets
+        run: |
+          mkdir -p dist
+          find artifacts -name "*.tar.gz" -o -name "*.zip" | xargs -I {} cp {} dist/
 
-        # Generate checksums
-        cd dist
-        sha256sum * > checksums.txt
-        cd ..
+          # Generate checksums
+          cd dist
+          sha256sum * > checksums.txt
+          cd ..
 
-    - name: Generate release notes
-      id: release_notes
-      run: |
-        cat > release_notes.md << 'EOF'
-        ## 🎉 Release v${{ steps.version.outputs.VERSION }}
+      - name: Generate release notes
+        id: release_notes
+        run: |
+          cat > release_notes.md << 'EOF'
+          ## 🎉 Release v${{ steps.version.outputs.VERSION }}
 
-        ### 📦 Installation
+          ### 📦 Installation
 
-        **Quick Install (Linux/macOS):**
-        ```bash
-        # Download the appropriate binary for your platform
-        # Extract and place in your PATH
-        ```
+          **Quick Install (Linux/macOS):**
+          ```bash
+          # Download the appropriate binary for your platform
+          # Extract and place in your PATH
+          ```
 
-        **Manual Installation:**
-        1. Download the appropriate package for your platform below
-        2. Extract the archive
-        3. Copy the binary to your PATH (e.g., `/usr/local/bin/`)
-        4. Run `serverhealth configure` to set up monitoring
+          **Manual Installation:**
+          1. Download the appropriate package for your platform below
+          2. Extract the archive
+          3. Copy the binary to your PATH (e.g., `/usr/local/bin/`)
+          4. Run `serverhealth configure` to set up monitoring
 
-        ### 🚀 Quick Start
+          ### 🚀 Quick Start
 
-        ```bash
-        # Configure the monitor
-        serverhealth configure
+          ```bash
+          # Configure the monitor
+          serverhealth configure
 
-        # Start monitoring
-        serverhealth start
+          # Start monitoring
+          serverhealth start
 
-        # Install as system service (requires sudo)
-        sudo serverhealth install
+          # Install as system service (requires sudo)
+          sudo serverhealth install
 
-        # Check status
-        serverhealth status
-        ```
+          # Check status
+          serverhealth status
+          ```
 
-        ### 📋 Platform Support
+          ### 📋 Platform Support
 
-        - ✅ Linux (x64, ARM64)
-        - ✅ macOS (Intel, Apple Silicon)
-        - ✅ Windows (x64)
+          - ✅ Linux (x64, ARM64)
+          - ✅ macOS (Intel, Apple Silicon)
+          - ✅ Windows (x64)
 
-        ### 🔧 Features
+          ### 🔧 Features
 
-        - Interactive CLI configuration wizard
-        - Disk, CPU, and Memory monitoring
-        - Slack notifications with custom webhooks
-        - Cross-platform service installation
-        - Configurable thresholds and check intervals
-        - Beautiful CLI interface with colors and emojis
-        - Easy log viewing and service management
-        - Rate-limited notifications to prevent spam
+          - Interactive CLI configuration wizard
+          - Disk, CPU, and Memory monitoring
+          - Slack notifications with custom webhooks
+          - Cross-platform service installation
+          - Configurable thresholds and check intervals
+          - Beautiful CLI interface with colors and emojis
+          - Easy log viewing and service management
+          - Rate-limited notifications to prevent spam
 
-        ### 📊 Monitoring Capabilities
+          ### 📊 Monitoring Capabilities
 
-        - **Disk Usage**: Monitor disk space with configurable thresholds
-        - **CPU Usage**: Track CPU utilization across all cores
-        - **Memory Usage**: Monitor RAM consumption
-        - **Smart Alerts**: Context-aware notifications with different severity levels
-        - **Service Integration**: Install as system service on Linux, macOS, and Windows
+          - **Disk Usage**: Monitor disk space with configurable thresholds
+          - **CPU Usage**: Track CPU utilization across all cores
+          - **Memory Usage**: Monitor RAM consumption
+          - **Smart Alerts**: Context-aware notifications with different severity levels
+          - **Service Integration**: Install as system service on Linux, macOS, and Windows
 
-        ### 📝 Changes
+          ### 📝 Changes
 
-        See commit history for detailed changes in this release.
-        EOF
+          See commit history for detailed changes in this release.
+          EOF
 
-    - name: Create Release
-      uses: softprops/action-gh-release@v1
-      with:
-        tag_name: v${{ steps.version.outputs.VERSION }}
-        name: Release v${{ steps.version.outputs.VERSION }}
-        body_path: release_notes.md
-        draft: false
-        prerelease: false
-        files: |
-          dist/*.tar.gz
-          dist/*.zip
-          dist/checksums.txt
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ steps.version.outputs.VERSION }}
+          name: Release v${{ steps.version.outputs.VERSION }}
+          body_path: release_notes.md
+          draft: false
+          prerelease: false
+          files: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/checksums.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # Optional Docker build (only if Dockerfile exists)
   docker:
@@ -287,49 +271,49 @@ jobs:
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
 
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Check if Dockerfile exists
-      id: dockerfile_check
-      run: |
-        if [ -f "Dockerfile" ]; then
-          echo "dockerfile_exists=true" >> $GITHUB_OUTPUT
-        else
-          echo "dockerfile_exists=false" >> $GITHUB_OUTPUT
-          echo "No Dockerfile found, skipping Docker build"
-        fi
+      - name: Check if Dockerfile exists
+        id: dockerfile_check
+        run: |
+          if [ -f "Dockerfile" ]; then
+            echo "dockerfile_exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "dockerfile_exists=false" >> $GITHUB_OUTPUT
+            echo "No Dockerfile found, skipping Docker build"
+          fi
 
-    - name: Set up Docker Buildx
-      if: steps.dockerfile_check.outputs.dockerfile_exists == 'true'
-      uses: docker/setup-buildx-action@v3
+      - name: Set up Docker Buildx
+        if: steps.dockerfile_check.outputs.dockerfile_exists == 'true'
+        uses: docker/setup-buildx-action@v3
 
-    - name: Log in to Docker Hub
-      if: steps.dockerfile_check.outputs.dockerfile_exists == 'true' && github.event_name != 'pull_request'
-      uses: docker/login-action@v3
-      with:
-        username: ${{ secrets.DOCKER_USERNAME }}
-        password: ${{ secrets.DOCKER_PASSWORD }}
+      - name: Log in to Docker Hub
+        if: steps.dockerfile_check.outputs.dockerfile_exists == 'true' && github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
 
-    - name: Set version
-      if: steps.dockerfile_check.outputs.dockerfile_exists == 'true'
-      id: version
-      run: |
-        if [[ $GITHUB_REF == refs/tags/* ]]; then
-          VERSION=${GITHUB_REF#refs/tags/v}
-        else
-          VERSION="dev"
-        fi
-        echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+      - name: Set version
+        if: steps.dockerfile_check.outputs.dockerfile_exists == 'true'
+        id: version
+        run: |
+          if [[ $GITHUB_REF == refs/tags/* ]]; then
+            VERSION=${GITHUB_REF#refs/tags/v}
+          else
+            VERSION="dev"
+          fi
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
 
-    - name: Build and push Docker image
-      if: steps.dockerfile_check.outputs.dockerfile_exists == 'true'
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        platforms: linux/amd64,linux/arm64
-        push: ${{ github.event_name != 'pull_request' }}
-        tags: |
-          ${{ github.repository_owner }}/serverhealth:${{ steps.version.outputs.VERSION }}
-          ${{ github.repository_owner }}/serverhealth:latest
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
+      - name: Build and push Docker image
+        if: steps.dockerfile_check.outputs.dockerfile_exists == 'true'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: |
+            ${{ github.repository_owner }}/serverhealth:${{ steps.version.outputs.VERSION }}
+            ${{ github.repository_owner }}/serverhealth:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

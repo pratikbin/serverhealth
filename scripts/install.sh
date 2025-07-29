@@ -30,7 +30,7 @@ print_header() {
     echo "║                    ServerHealth Installer                    ║"
     echo "║                                                              ║"
     echo "║  A comprehensive server monitoring tool with Slack           ║"
-    echo "║  integration for real-time alerts and notifications.         ║"
+    echo "║  integration  for real-time alerts and notifications.         ║"
     echo "╚══════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
 }

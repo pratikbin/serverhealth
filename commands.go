@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -176,17 +177,17 @@ func runStatus(cmd *cobra.Command, args []string) {
 	fmt.Println()
 	fmt.Println(bold("Monitoring Configuration:"))
 
-	if config.DiskEnabled {
-		fmt.Printf("  • Disk usage (threshold: %d%%, check every %d hours)\n",
-			config.DiskThreshold, config.DiskCheckInterval)
+	if config.Disk.Enabled {
+		fmt.Printf("  • Disk usage (threshold: %d%%, check every %d hours, max alerts: %d/day)\n",
+			config.Disk.Threshold, config.Disk.CheckInterval, config.Disk.MaxDailyAlerts)
 	}
-	if config.CPUEnabled {
-		fmt.Printf("  • CPU usage (threshold: %d%%, check every %d minutes)\n",
-			config.CPUThreshold, config.CheckInterval)
+	if config.CPU.Enabled {
+		fmt.Printf("  • CPU usage (threshold: %d%%, check every %d minutes, max alerts: %d/day)\n",
+			config.CPU.Threshold, config.CPU.CheckInterval, config.CPU.MaxDailyAlerts)
 	}
-	if config.MemoryEnabled {
-		fmt.Printf("  • Memory usage (threshold: %d%%, check every %d minutes)\n",
-			config.MemoryThreshold, config.CheckInterval)
+	if config.Memory.Enabled {
+		fmt.Printf("  • Memory usage (threshold: %d%%, check every %d minutes, max alerts: %d/day)\n",
+			config.Memory.Threshold, config.Memory.CheckInterval, config.Memory.MaxDailyAlerts)
 	}
 
 	fmt.Println()
@@ -242,11 +243,23 @@ func runStatus(cmd *cobra.Command, args []string) {
 		fmt.Printf("  • PID file: %s\n", pidFile)
 	}
 
-	if config.SlackDiskWebhookURL != "" {
-		fmt.Println("  • Slack notifications: Enabled for disk alerts")
-	}
-	if config.SlackCPUMemoryWebhookURL != "" {
-		fmt.Println("  • Slack notifications: Enabled for CPU/memory alerts")
+	// Show notification providers
+	if len(config.Notifications) > 0 {
+		fmt.Println("  • Notification providers:")
+		for _, notification := range config.Notifications {
+			if notification.Enabled {
+				switch notification.Type {
+				case "slack":
+					fmt.Printf("    - Slack: %s\n", notification.WebhookURL[:30]+"...")
+				case "telegram":
+					fmt.Printf("    - Telegram: Bot token configured\n")
+				case "discord":
+					fmt.Printf("    - Discord: %s\n", notification.WebhookURL[:30]+"...")
+				}
+			}
+		}
+	} else {
+		fmt.Println("  • No notification providers configured")
 	}
 
 	fmt.Println()
@@ -381,7 +394,7 @@ func runDaemon(cmd *cobra.Command, args []string) {
 
 	// Setup logging to file
 	logFile := filepath.Join(getLogDir(), appName+".log")
-	f, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+	f, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o666)
 	if err != nil {
 		log.Fatal("Failed to open log file:", err)
 	}
@@ -441,19 +454,14 @@ func startInBackground() {
 		os.Exit(1)
 	}
 
-	// Create directories for PID and logs
+	// Ensure directories exist
+	if err := ensureDirectories(); err != nil {
+		fmt.Println(red("Failed to create directories:"), err)
+		os.Exit(1)
+	}
+
 	pidDir := getPIDDir()
 	logDir := getLogDir()
-
-	if err := os.MkdirAll(pidDir, 0755); err != nil {
-		fmt.Println(red("Failed to create PID directory:"), err)
-		os.Exit(1)
-	}
-	if err := os.MkdirAll(logDir, 0755); err != nil {
-		fmt.Println(red("Failed to create log directory:"), err)
-		os.Exit(1)
-	}
-
 	pidFile := filepath.Join(pidDir, appName+".pid")
 	logFile := filepath.Join(logDir, appName+".log")
 
@@ -461,7 +469,7 @@ func startInBackground() {
 	cmd := exec.Command(execPath, "daemon")
 
 	// Setup logging
-	f, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+	f, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o666)
 	if err != nil {
 		fmt.Println(red("Failed to open log file:"), err)
 		os.Exit(1)
@@ -484,7 +492,7 @@ func startInBackground() {
 
 	// Write PID file
 	pidContent := fmt.Sprintf("%d\n", cmd.Process.Pid)
-	if err := os.WriteFile(pidFile, []byte(pidContent), 0644); err != nil {
+	if err := os.WriteFile(pidFile, []byte(pidContent), 0o644); err != nil {
 		fmt.Println(red("Failed to write PID file:"), err)
 		if killErr := cmd.Process.Kill(); killErr != nil {
 			fmt.Printf("Error killing process: %v\n", killErr)
@@ -551,8 +559,8 @@ func stopDaemonProcess(pidFile string) error {
 		return fmt.Errorf("failed to read PID file: %v", err)
 	}
 
-	pidStr := string(data)
-	pid, err := strconv.Atoi(pidStr[:len(pidStr)-1]) // Remove newline
+	pidStr := strings.TrimSpace(string(data))
+	pid, err := strconv.Atoi(pidStr)
 	if err != nil {
 		return fmt.Errorf("invalid PID in file: %v", err)
 	}
@@ -560,6 +568,7 @@ func stopDaemonProcess(pidFile string) error {
 	// Find the process
 	process, err := os.FindProcess(pid)
 	if err != nil {
+		// Remove stale PID file
 		if removeErr := os.Remove(pidFile); removeErr != nil && !os.IsNotExist(removeErr) {
 			fmt.Printf("Error removing PID file: %v\n", removeErr)
 		}
@@ -568,6 +577,7 @@ func stopDaemonProcess(pidFile string) error {
 
 	// Check if process is still running
 	if err := process.Signal(syscall.Signal(0)); err != nil {
+		// Remove stale PID file
 		if removeErr := os.Remove(pidFile); removeErr != nil && !os.IsNotExist(removeErr) {
 			fmt.Printf("Error removing PID file: %v\n", removeErr)
 		}
@@ -622,23 +632,31 @@ func isAlreadyRunning() bool {
 	return checkPIDFile(pidFile)
 }
 
-// Helper function to check PID file
+// Helper function to check PID file with improved validation
 func checkPIDFile(pidFile string) bool {
 	data, err := os.ReadFile(pidFile)
 	if err != nil {
 		return false
 	}
 
-	pidStr := string(data)
-	pid, err := strconv.Atoi(pidStr[:len(pidStr)-1]) // Remove newline
+	pidStr := strings.TrimSpace(string(data))
+	pid, err := strconv.Atoi(pidStr)
 	if err != nil {
+		// Remove invalid PID file
+		os.Remove(pidFile)
+		return false
+	}
+
+	// Additional validation: check if PID is reasonable
+	if pid <= 0 || pid > 999999 {
+		os.Remove(pidFile)
 		return false
 	}
 
 	return isProcessRunning(pid)
 }
 
-// Helper function to check if process is running
+// Helper function to check if process is running with improved validation
 func isProcessRunning(pid int) bool {
 	process, err := os.FindProcess(pid)
 	if err != nil {
@@ -650,18 +668,48 @@ func isProcessRunning(pid int) bool {
 	return err == nil
 }
 
-// Helper function to get PID directory
+// Helper function to get PID directory with improved path handling
 func getPIDDir() string {
 	if os.Geteuid() == 0 {
 		return "/var/run"
 	}
+
+	// Use XDG_RUNTIME_DIR if available
+	if runtimeDir := os.Getenv("XDG_RUNTIME_DIR"); runtimeDir != "" {
+		return filepath.Join(runtimeDir, appName)
+	}
+
 	return filepath.Join(os.Getenv("HOME"), ".local", "run")
 }
 
-// Helper function to get log directory
+// Helper function to get log directory with improved path handling
 func getLogDir() string {
 	if os.Geteuid() == 0 {
 		return "/var/log"
 	}
+
+	// Use XDG_DATA_HOME if available
+	if dataHome := os.Getenv("XDG_DATA_HOME"); dataHome != "" {
+		return filepath.Join(dataHome, appName, "logs")
+	}
+
 	return filepath.Join(os.Getenv("HOME"), ".local", "log")
+}
+
+// Helper function to ensure directories exist with proper permissions
+func ensureDirectories() error {
+	pidDir := getPIDDir()
+	logDir := getLogDir()
+
+	// Create PID directory
+	if err := os.MkdirAll(pidDir, 0o755); err != nil {
+		return fmt.Errorf("failed to create PID directory: %w", err)
+	}
+
+	// Create log directory
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		return fmt.Errorf("failed to create log directory: %w", err)
+	}
+
+	return nil
 }

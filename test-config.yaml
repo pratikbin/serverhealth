@@ -1,0 +1,43 @@
+# ServerHealth Test Configuration
+# This file contains sample values for testing the modular notification system
+
+# Monitoring Configuration
+disk:
+  enabled: true
+  threshold: 85
+  check_interval: 6  # hours
+  max_daily_alerts: 3
+
+cpu:
+  enabled: true
+  threshold: 90
+  check_interval: 30  # minutes
+  max_daily_alerts: 8
+
+memory:
+  enabled: true
+  threshold: 90
+  check_interval: 45  # minutes
+  max_daily_alerts: 6
+
+# Notification Providers
+notifications:
+  # Slack Configuration (replace with your actual webhook)
+  - type: slack
+    enabled: true
+    webhook_url: "https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX"
+
+  # Telegram Configuration (replace with your actual bot token and chat ID)
+  - type: telegram
+    enabled: true
+    bot_token: "1234567890:ABCdefGHIjklMNOpqrsTUVwxyz"
+    chat_id: "123456789"
+
+  # Discord Configuration (replace with your actual webhook)
+  - type: discord
+    enabled: true
+    webhook_url: "https://discord.com/api/webhooks/123456789012345678/abcdefghijklmnopqrstuvwxyz1234567890123456789012345678901234567890"
+
+# General Settings
+log_level: debug
+service_name: serverhealth-test

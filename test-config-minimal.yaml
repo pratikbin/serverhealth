@@ -1,0 +1,31 @@
+# ServerHealth Minimal Test Configuration
+# This file contains minimal settings for quick testing
+
+# Monitoring Configuration
+disk:
+  enabled: true
+  threshold: 80
+  check_interval: 12  # hours
+  max_daily_alerts: 5
+
+cpu:
+  enabled: true
+  threshold: 85
+  check_interval: 60  # minutes
+  max_daily_alerts: 5
+
+memory:
+  enabled: true
+  threshold: 85
+  check_interval: 60  # minutes
+  max_daily_alerts: 5
+
+# Single Notification Provider (Slack only)
+notifications:
+  - type: slack
+    enabled: true
+    webhook_url: "https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX"
+
+# General Settings
+log_level: info
+service_name: serverhealth

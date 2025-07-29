@@ -1,35 +1,25 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
-	"net/http"
 	"os"
 	"time"
 )
 
 const (
-	maxNotificationsPerDay = 5
-	resetNotificationHour  = 0
+	resetNotificationHour = 0
 )
 
 // Monitor represents the main monitoring service
 type Monitor struct {
-	config                  *Config
-	cpuNotificationCount    int
-	memoryNotificationCount int
-	diskNotificationCount   int
-	logger                  *log.Logger
-	ctx                     context.Context
-	cancel                  context.CancelFunc
-}
-
-// Notification struct for Slack messages
-type Notification struct {
-	Text string `json:"text"`
+	config              *Config
+	notificationManager *NotificationManager
+	notificationCounts  map[string]int // Track counts per metric
+	logger              *log.Logger
+	ctx                 context.Context
+	cancel              context.CancelFunc
 }
 
 // NewMonitor creates a new monitoring instance
@@ -37,11 +27,39 @@ func NewMonitor(config *Config) *Monitor {
 	ctx, cancel := context.WithCancel(context.Background())
 	logger := log.New(os.Stdout, "", log.LstdFlags)
 
+	// Create notification manager
+	notificationManager := NewNotificationManager(logger)
+
+	// Add notification providers based on configuration
+	for _, notification := range config.GetEnabledNotifications() {
+		var provider NotificationProvider
+
+		switch notification.Type {
+		case "slack":
+			provider = NewSlackProvider(notification.WebhookURL, notificationManager.client)
+		case "telegram":
+			provider = NewTelegramProvider(notification.BotToken, notification.ChatID, notificationManager.client)
+		case "discord":
+			provider = NewDiscordProvider(notification.WebhookURL, notificationManager.client)
+		default:
+			logger.Printf("Unknown notification type: %s", notification.Type)
+			continue
+		}
+
+		if err := notificationManager.AddProvider(provider); err != nil {
+			logger.Printf("Failed to add notification provider %s: %v", notification.Type, err)
+		} else {
+			logger.Printf("Added notification provider: %s", notification.Type)
+		}
+	}
+
 	return &Monitor{
-		config: config,
-		logger: logger,
-		ctx:    ctx,
-		cancel: cancel,
+		config:              config,
+		notificationManager: notificationManager,
+		notificationCounts:  make(map[string]int),
+		logger:              logger,
+		ctx:                 ctx,
+		cancel:              cancel,
 	}
 }
 
@@ -61,12 +79,16 @@ func (m *Monitor) Start() {
 	go m.resetNotificationCounts()
 
 	// Start monitoring routines based on configuration
-	if m.config.DiskEnabled {
+	if m.config.Disk.Enabled {
 		go m.monitorDiskUsage(hostname, ip)
 	}
 
-	if m.config.CPUEnabled || m.config.MemoryEnabled {
-		go m.monitorCPUAndMemory(hostname, ip)
+	if m.config.CPU.Enabled {
+		go m.monitorCPUUsage(hostname, ip)
+	}
+
+	if m.config.Memory.Enabled {
+		go m.monitorMemoryUsage(hostname, ip)
 	}
 
 	// Keep the service running
@@ -89,9 +111,7 @@ func (m *Monitor) resetNotificationCounts() {
 		case <-ticker.C:
 			now := time.Now()
 			if now.Hour() == resetNotificationHour {
-				m.cpuNotificationCount = 0
-				m.memoryNotificationCount = 0
-				m.diskNotificationCount = 0
+				m.notificationCounts = make(map[string]int)
 				m.logger.Println("Notification counts reset.")
 			}
 		case <-m.ctx.Done():
@@ -102,7 +122,7 @@ func (m *Monitor) resetNotificationCounts() {
 
 // monitorDiskUsage monitors disk usage
 func (m *Monitor) monitorDiskUsage(hostname, ip string) {
-	ticker := time.NewTicker(time.Duration(m.config.DiskCheckInterval) * time.Hour)
+	ticker := time.NewTicker(time.Duration(m.config.Disk.CheckInterval) * time.Hour)
 	defer ticker.Stop()
 
 	// Check immediately on start
@@ -118,20 +138,36 @@ func (m *Monitor) monitorDiskUsage(hostname, ip string) {
 	}
 }
 
-// monitorCPUAndMemory monitors CPU and memory usage
-func (m *Monitor) monitorCPUAndMemory(hostname, ip string) {
-	ticker := time.NewTicker(time.Duration(m.config.CheckInterval) * time.Minute)
+// monitorCPUUsage monitors CPU usage
+func (m *Monitor) monitorCPUUsage(hostname, ip string) {
+	ticker := time.NewTicker(time.Duration(m.config.CPU.CheckInterval) * time.Minute)
 	defer ticker.Stop()
+
+	// Check immediately on start
+	m.checkCPUUsage(hostname, ip)
 
 	for {
 		select {
 		case <-ticker.C:
-			if m.config.CPUEnabled {
-				m.checkCPUUsage(hostname, ip)
-			}
-			if m.config.MemoryEnabled {
-				m.checkMemoryUsage(hostname, ip)
-			}
+			m.checkCPUUsage(hostname, ip)
+		case <-m.ctx.Done():
+			return
+		}
+	}
+}
+
+// monitorMemoryUsage monitors memory usage
+func (m *Monitor) monitorMemoryUsage(hostname, ip string) {
+	ticker := time.NewTicker(time.Duration(m.config.Memory.CheckInterval) * time.Minute)
+	defer ticker.Stop()
+
+	// Check immediately on start
+	m.checkMemoryUsage(hostname, ip)
+
+	for {
+		select {
+		case <-ticker.C:
+			m.checkMemoryUsage(hostname, ip)
 		case <-m.ctx.Done():
 			return
 		}
@@ -140,7 +176,8 @@ func (m *Monitor) monitorCPUAndMemory(hostname, ip string) {
 
 // checkDiskUsage checks disk usage and sends alerts if needed
 func (m *Monitor) checkDiskUsage(hostname, ip string) {
-	if m.diskNotificationCount >= maxNotificationsPerDay {
+	metricKey := "disk"
+	if m.notificationCounts[metricKey] >= m.config.Disk.MaxDailyAlerts {
 		return
 	}
 
@@ -150,20 +187,34 @@ func (m *Monitor) checkDiskUsage(hostname, ip string) {
 		return
 	}
 
-	if usage >= m.config.DiskThreshold {
-		emoji := ":warning:"
+	if usage >= m.config.Disk.Threshold {
+		level := NotificationLevelWarning
 		if usage >= 95 {
-			emoji = ":x:"
+			level = NotificationLevelError
 		}
-		message := fmt.Sprintf("%s Server: %s (%s)\nDisk usage alert: %d%% used.", emoji, hostname, ip, usage)
-		m.sendSlackNotification(m.config.SlackDiskWebhookURL, message)
-		m.diskNotificationCount++
+
+		message := &NotificationMessage{
+			Type:      NotificationTypeSlack, // Will be overridden by providers
+			Level:     level,
+			Title:     "Disk Usage Alert",
+			Message:   fmt.Sprintf("Disk usage has exceeded the threshold of %d%%", m.config.Disk.Threshold),
+			Hostname:  hostname,
+			IP:        ip,
+			Timestamp: time.Now(),
+			Metric:    "Disk Usage",
+			Value:     fmt.Sprintf("%d%%", usage),
+			Threshold: fmt.Sprintf("%d%%", m.config.Disk.Threshold),
+		}
+
+		m.notificationManager.Send(m.ctx, message)
+		m.notificationCounts[metricKey]++
 	}
 }
 
 // checkCPUUsage checks CPU usage and sends alerts if needed
 func (m *Monitor) checkCPUUsage(hostname, ip string) {
-	if m.cpuNotificationCount >= maxNotificationsPerDay {
+	metricKey := "cpu"
+	if m.notificationCounts[metricKey] >= m.config.CPU.MaxDailyAlerts {
 		return
 	}
 
@@ -173,20 +224,34 @@ func (m *Monitor) checkCPUUsage(hostname, ip string) {
 		return
 	}
 
-	if usage >= float64(m.config.CPUThreshold) {
-		emoji := ":warning:"
+	if usage >= float64(m.config.CPU.Threshold) {
+		level := NotificationLevelWarning
 		if usage >= 95 {
-			emoji = ":x:"
+			level = NotificationLevelError
 		}
-		message := fmt.Sprintf("%s Server: %s (%s)\nCPU usage alert: %.2f%% used.", emoji, hostname, ip, usage)
-		m.sendSlackNotification(m.config.SlackCPUMemoryWebhookURL, message)
-		m.cpuNotificationCount++
+
+		message := &NotificationMessage{
+			Type:      NotificationTypeSlack, // Will be overridden by providers
+			Level:     level,
+			Title:     "CPU Usage Alert",
+			Message:   fmt.Sprintf("CPU usage has exceeded the threshold of %d%%", m.config.CPU.Threshold),
+			Hostname:  hostname,
+			IP:        ip,
+			Timestamp: time.Now(),
+			Metric:    "CPU Usage",
+			Value:     fmt.Sprintf("%.2f%%", usage),
+			Threshold: fmt.Sprintf("%d%%", m.config.CPU.Threshold),
+		}
+
+		m.notificationManager.Send(m.ctx, message)
+		m.notificationCounts[metricKey]++
 	}
 }
 
 // checkMemoryUsage checks memory usage and sends alerts if needed
 func (m *Monitor) checkMemoryUsage(hostname, ip string) {
-	if m.memoryNotificationCount >= maxNotificationsPerDay {
+	metricKey := "memory"
+	if m.notificationCounts[metricKey] >= m.config.Memory.MaxDailyAlerts {
 		return
 	}
 
@@ -196,44 +261,26 @@ func (m *Monitor) checkMemoryUsage(hostname, ip string) {
 		return
 	}
 
-	if usage >= float64(m.config.MemoryThreshold) {
-		emoji := ":warning:"
+	if usage >= float64(m.config.Memory.Threshold) {
+		level := NotificationLevelWarning
 		if usage >= 95 {
-			emoji = ":x:"
+			level = NotificationLevelError
 		}
-		message := fmt.Sprintf("%s Server: %s (%s)\nMemory usage alert: %.2f%% used.", emoji, hostname, ip, usage)
-		m.sendSlackNotification(m.config.SlackCPUMemoryWebhookURL, message)
-		m.memoryNotificationCount++
-	}
-}
 
-// sendSlackNotification sends a notification to Slack
-func (m *Monitor) sendSlackNotification(url, message string) {
-	if url == "" {
-		return
-	}
-
-	payload := Notification{Text: message}
-	jsonData, err := json.Marshal(payload)
-	if err != nil {
-		m.logger.Printf("Error marshaling JSON: %v", err)
-		return
-	}
-
-	resp, err := http.Post(url, "application/json", bytes.NewBuffer(jsonData))
-	if err != nil {
-		m.logger.Printf("Error sending Slack notification: %v", err)
-		return
-	}
-	defer func() {
-		if err := resp.Body.Close(); err != nil {
-			m.logger.Printf("Error closing response body: %v", err)
+		message := &NotificationMessage{
+			Type:      NotificationTypeSlack, // Will be overridden by providers
+			Level:     level,
+			Title:     "Memory Usage Alert",
+			Message:   fmt.Sprintf("Memory usage has exceeded the threshold of %d%%", m.config.Memory.Threshold),
+			Hostname:  hostname,
+			IP:        ip,
+			Timestamp: time.Now(),
+			Metric:    "Memory Usage",
+			Value:     fmt.Sprintf("%.2f%%", usage),
+			Threshold: fmt.Sprintf("%d%%", m.config.Memory.Threshold),
 		}
-	}()
 
-	if resp.StatusCode != http.StatusOK {
-		m.logger.Printf("Non-OK HTTP status: %d", resp.StatusCode)
-	} else {
-		m.logger.Println("Slack notification sent successfully")
+		m.notificationManager.Send(m.ctx, message)
+		m.notificationCounts[metricKey]++
 	}
 }

@@ -1,0 +1,56 @@
+# ServerHealth Configuration Example
+# This file demonstrates the new modular configuration structure
+
+# Monitoring Configuration
+disk:
+  enabled: true
+  threshold: 80
+  check_interval: 12  # hours
+  max_daily_alerts: 5
+
+cpu:
+  enabled: true
+  threshold: 85
+  check_interval: 60  # minutes
+  max_daily_alerts: 5
+
+memory:
+  enabled: true
+  threshold: 85
+  check_interval: 60  # minutes
+  max_daily_alerts: 5
+
+# Notification Providers
+notifications:
+  # Slack Configuration
+  - type: slack
+    enabled: true
+    webhook_url: "https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK"
+
+  # Telegram Configuration
+  - type: telegram
+    enabled: true
+    bot_token: "YOUR_BOT_TOKEN_HERE"
+    chat_id: "YOUR_CHAT_ID_HERE"
+
+  # Discord Configuration
+  - type: discord
+    enabled: true
+    webhook_url: "https://discord.com/api/webhooks/YOUR/DISCORD/WEBHOOK"
+
+# General Settings
+log_level: info
+service_name: serverhealth
+
+# Legacy Configuration (deprecated - will be migrated automatically)
+# These fields are kept for backward compatibility
+slack_disk_webhook_url: ""
+slack_cpu_memory_webhook_url: ""
+disk_enabled: false
+cpu_enabled: false
+memory_enabled: false
+disk_threshold: 0
+cpu_threshold: 0
+memory_threshold: 0
+check_interval_minutes: 0
+disk_check_interval_hours: 0
